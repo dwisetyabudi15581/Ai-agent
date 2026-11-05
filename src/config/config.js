@@ -24,8 +24,11 @@ export const DEFAULT_CONFIG = {
   streamDefault: true,
   autoCompact: true,
   batasKonteks: 60000,
-  maksPutaran: 20,
-  maksTool: 50,
+  // Batas per giliran. 0 = TANPA BATAS (agent berhenti saat tugas selesai,
+  // atau saat terdeteksi mentok). Bukan angka mati: bisa diubah lewat
+  // config.json, /putaran <n>, atau CLI --putaran <n>.
+  maksPutaran: 0,
+  maksTool: 0,
   verbose: false,
   // Router model otomatis: pilih model per giliran sesuai kesulitan tugas
   // (hemat kuota untuk obrolan ringan, model kuat untuk tugas berat).
@@ -64,6 +67,19 @@ function keAngka(nilai, bawaan, min, maks) {
   const n = Number(nilai);
   if (!Number.isFinite(n)) return bawaan;
   return Math.min(Math.max(n, min), maks);
+}
+
+/**
+ * Batas yang mengenal nilai 0 sebagai "tanpa batas".
+ * keAngka() biasa memaksa nilai masuk rentang [min, maks], sehingga 0 tidak
+ * akan pernah lolos. Di sini 0 dilewatkan apa adanya dan pemakaiannya di
+ * loop memakai Infinity (lihat core/agen.js).
+ */
+function keAngkaBebas(nilai, bawaan, maks) {
+  const n = Number(nilai);
+  if (!Number.isFinite(n) || n < 0) return bawaan;
+  if (n === 0) return 0;
+  return Math.min(n, maks);
 }
 
 /** Muat konfigurasi: default -> config.json -> .env -> process.env (prioritas naik). */
@@ -117,8 +133,10 @@ export async function muatConfig() {
   cfg.maxTokens = keAngka(cfg.maxTokens, DEFAULT_CONFIG.maxTokens, 64, 131072);
   cfg.batasKonteks = keAngka(cfg.batasKonteks, DEFAULT_CONFIG.batasKonteks, 4000, 2000000);
   cfg.suhu = keAngka(cfg.suhu, DEFAULT_CONFIG.suhu, 0, 2);
-  cfg.maksPutaran = keAngka(cfg.maksPutaran, DEFAULT_CONFIG.maksPutaran, 1, 200);
-  cfg.maksTool = keAngka(cfg.maksTool, DEFAULT_CONFIG.maksTool, 1, 500);
+  // 0 = tanpa batas; selain itu dibatasi 1..10000 (rem pengaman agar tidak
+  // ada loop abadi karena salah ketik, mis. /putaran 999999).
+  cfg.maksPutaran = keAngkaBebas(cfg.maksPutaran, DEFAULT_CONFIG.maksPutaran, 10000);
+  cfg.maksTool = keAngkaBebas(cfg.maksTool, DEFAULT_CONFIG.maksTool, 10000);
   cfg.streamDefault = cfg.streamDefault !== false;
   cfg.autoCompact = cfg.autoCompact !== false;
   cfg.verbose = cfg.verbose === true;

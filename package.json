@@ -11,7 +11,7 @@
     "start": "node index.js",
     "teman": "node index.js --teman",
     "verbose": "node index.js --verbose",
-    "test": "node tests/audit1.mjs && node tests/audit2.mjs && node tests/audit3.mjs && node tests/uji-router.mjs && node tests/uji-router-relink.mjs && node tests/uji-batas.mjs && node tests/uji-keluar.mjs && node tests/uji-mentok.mjs && node tests/uji-putaran.mjs && node tests/uji-paralel.mjs && node tests/uji-server-mock.mjs && node tests/uji-timing-wrap.mjs && node tests/uji-waktu.mjs && node tests/uji-panas.mjs && node tests/uji-satu-penyedia.mjs",
+    "test": "node tests/audit1.mjs && node tests/audit2.mjs && node tests/audit3.mjs && node tests/uji-router.mjs && node tests/uji-router-relink.mjs && node tests/uji-batas.mjs && node tests/uji-keluar.mjs && node tests/uji-mentok.mjs && node tests/uji-putaran.mjs && node tests/uji-paralel.mjs && node tests/uji-server-mock.mjs && node tests/uji-timing-wrap.mjs && node tests/uji-waktu.mjs && node tests/uji-panas.mjs && node tests/uji-satu-penyedia.mjs && node tests/uji-vision.mjs && node tests/uji-tanpa-batas.mjs",
     "test:live": "bash tests/uji-ketahanan.sh && bash tests/uji-sigint.sh"
   },
   "engines": {

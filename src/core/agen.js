@@ -35,8 +35,14 @@ function terlihatMentok(pesan) {
 export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
   // Batas putaran/tool kini dari konfigurasi (dulu konstanta mati 20/50
   // sehingga cfg.maksPutaran & cfg.maksTool tidak berpengaruh).
-  const batasPutaran = Number(cfg.maksPutaran) || 20;
-  const batasTotalTool = Number(cfg.maksTool) || 50;
+  // 0 = TANPA BATAS → Infinity. Loop tetap punya rem pengaman:
+  //  (a) selesai saat model berhenti memanggil tool,
+  //  (b) berhenti saat terlihatMentok() dua putaran beruntun,
+  //  (c) dibatalkan user via Ctrl-C (SIGINT ditangani index.js).
+  const batasPutaran =
+    Number(cfg.maksPutaran) === 0 ? Infinity : Number(cfg.maksPutaran) || Infinity;
+  const batasTotalTool =
+    Number(cfg.maksTool) === 0 ? Infinity : Number(cfg.maksTool) || Infinity;
 
   // System prompt disusun ulang tiap giliran agar memori & waktu tetap segar
   async function siapkanMessages(mode) {
@@ -246,11 +252,22 @@ export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
         sesi.messages.push({ role: "tool", tool_call_id: call.id, name: call.function?.name, content: berhenti });
         bubble("error", berhenti);
       }
+
+      // REM PENGAMAN: bila SEMUA panggilan putaran ini ditolak (kuota tool
+      // sudah habis), tidak ada kemajuan yang mungkin terjadi. Putaran
+      // berikutnya hanya akan meminta tool lagi dan ditolak lagi — bila
+      // maksPutaran = 0 (tanpa batas), itu loop abadi yang membengkakkan
+      // riwayat tanpa guna. Hentikan sekarang.
+      if (dijalankan.length === 0 && ditolak.length > 0) {
+        bubble("info", `Berhenti: kuota ${batasTotalTool} eksekusi tool per giliran sudah habis. Naikkan dengan /maksTool <n> (0 = tanpa batas) atau pecah tugasnya.`);
+        return { selesai: jawabanTerakhir.length > 0, mentok: true };
+      }
     }
 
     // Batas tercapai BUKAN kegagalan total: pekerjaan yang sudah dilakukan tetap
     // tersimpan di riwayat. Beri tahu user cara melanjutkan, jangan buang konteks.
-    bubble("info", `Batas ${batasPutaran} putaran tercapai untuk satu giliran. Hasil sejauh ini tetap tersimpan — lanjutkan dengan meminta langkah berikutnya atau pecah tugasnya.`);
+    const label = batasPutaran === Infinity ? "Tak terbatas" : `Batas ${batasPutaran}`;
+    bubble("info", `${label} putaran tercapai untuk satu giliran. Hasil sejauh ini tetap tersimpan — lanjutkan dengan meminta langkah berikutnya atau pecah tugasnya.`);
     return { selesai: jawabanTerakhir.length > 0, mentok: true };
   }
 

@@ -9,6 +9,8 @@
  *   --router          paksa router model otomatis aktif (timpa kunci lama)
  *   --no-stream       non-streaming
  *   --verbose         tampilkan usage & reasoning
+ *   --putaran <n>     batas putaran tool per giliran (0 = TANPA BATAS, default)
+ *   --makstool <n>    batas total eksekusi tool per giliran (0 = TANPA BATAS, default)
  *   --max <n>         batas jumlah giliran user (otomatis/robot)
  *
  * Struktur kode ada di src/:
@@ -48,6 +50,16 @@ if (nilai("model")) {
 if (flag("router")) cfg.modelTerkunci = false; // paksa kembali otomatis
 if (flag("no-stream")) cfg.streamDefault = false;
 if (flag("verbose")) cfg.verbose = true;
+// --putaran <n> / --makstool <n> : 0 = tanpa batas (default).
+if (nilai("putaran") !== undefined) {
+  const n = Number(nilai("putaran"));
+  if (Number.isFinite(n) && n >= 0) cfg.maksPutaran = n === 0 ? 0 : Math.min(n, 10000);
+}
+if (nilai("makstool") !== undefined) {
+  const n = Number(nilai("makstool"));
+  if (Number.isFinite(n) && n >= 0) cfg.maksTool = n === 0 ? 0 : Math.min(n, 10000);
+}
+// --max <n> membatasi jumlah giliran user dalam satu sesi interaktif.
 const batasGiliran = Number(nilai("max")) || Infinity;
 
 if (!cfg.apiKey) {
@@ -94,6 +106,8 @@ function bantuan() {
     `${C.bold}/stream${C.reset} ${C.gray}|${C.reset} ${C.bold}/nostream${C.reset}  mode balasan`,
     `${C.bold}/suhu <0-2>${C.reset}      kreativitas`,
     `${C.bold}/maxtoken <n>${C.reset}    batas panjang jawaban`,
+    `${C.bold}/putaran <n|0>${C.reset}    batas putaran/giliran (0 = tanpa batas)`,
+    `${C.bold}/maksTool <n|0>${C.reset}    batas total tool/giliran (0 = tanpa batas)`,
     `${C.bold}/verbose${C.reset}          info token & reasoning`,
     `${C.bold}/biaya${C.reset}            estimasi kuota token sesi ini`,
     `${C.bold}/clear${C.reset} ${C.gray}|${C.reset} ${C.bold}/quit${C.reset}       bersihkan layar / keluar`,
@@ -275,6 +289,34 @@ async function tanganiPerintah(input) {
       cfg.maxTokens = Math.min(n, 131072);
       await simpanConfig(cfg);
       bubble("sukses", `max_tokens = ${cfg.maxTokens}`);
+      return true;
+    }
+
+    // 0 = tanpa batas. Selain itu dibatasi 1..10000 sebagai rem pengaman.
+    case "putaran": {
+      const n = Number(arg);
+      if (!Number.isFinite(n) || n < 0) { bubble("error", "Pakai angka ≥ 0 (0 = tanpa batas)."); return true; }
+      const nilai = n === 0 ? 0 : Math.min(n, 10000);
+      cfg.maksPutaran = nilai;
+      await simpanConfig(cfg);
+      bubble("sukses", nilai === 0 ? "Putaran: TANPA BATAS (berhenti saat tugas selesai)." : `Putaran per giliran = ${nilai}`);
+      return true;
+    }
+
+    case "makstool": {
+      const n = Number(arg);
+      if (!Number.isFinite(n) || n < 0) { bubble("error", "Pakai angka ≥ 0 (0 = tanpa batas)."); return true; }
+      const nilai = n === 0 ? 0 : Math.min(n, 10000);
+      cfg.maksTool = nilai;
+      await simpanConfig(cfg);
+      bubble("sukses", nilai === 0 ? "Total tool: TANPA BATAS." : `Total tool per giliran = ${nilai}`);
+      return true;
+    }
+
+    case "batas": {
+      const p = cfg.maksPutaran === 0 ? "tanpa batas" : cfg.maksPutaran;
+      const t = cfg.maksTool === 0 ? "tanpa batas" : cfg.maksTool;
+      bubble("info", `Putaran per giliran: ${p} · Total tool per giliran: ${t}`);
       return true;
     }
 

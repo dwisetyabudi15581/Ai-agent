@@ -8,12 +8,45 @@ import { HOME, DIR_BACKUP, pastikanDir } from "../paths.js";
 import { singkat } from "../ui/util.js";
 import { ambilKatalogLengkap, kapabilitasTampil } from "../api/katalog.js";
 import { muatMemori, tambahMemori } from "../core/memori.js";
+import {
+  muatToolDinamis, keSkema, simpanTool, hapusTool,
+  daftarToolDinamis, galatTool, DIR_TOOL, namaSah,
+} from "./registry.js";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 export const BATAS_OUTPUT_TERMINAL = 20000;
 export const BATAS_BACA_FILE = 40000;
+
+// ---------- BACA GAMBAR (vision) ----------
+// PENTING: kedua konstanta ini HARUS berada di atas buatEksekutor.
+// `const` tidak di-hoist seperti `function` — bila diletakkan di bawah,
+// siapkanGambar() yang dijalankan saat buatEksekutor() dipanggil akan
+// menabrak TDZ (ReferenceError) dan mimeGambar() mengembalikan null
+// karena peta ekstensinya belum terinisialisasi.
+const EKSTENSI_GAMBAR = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+};
+
+// 8 MB: base64 membengkakkan ~33%, dan gateway membatasi ukuran body.
+const BATAS_GAMBAR = 8 * 1024 * 1024;
+
+/**
+ * Mime gambar dari nama berkas; null bila ekstensi tidak didukung.
+ * Menerima nama lengkap ("foto.PNG") MAUPUN ekstensi mentah (".png").
+ * Tanpa path.extname() di sini, "foto.png" akan gagal cocok karena peta
+ * EKSTENSI_GAMBAR berkunci ".png" (dengan titik).
+ */
+export function mimeGambar(nama) {
+  const mentah = String(nama || "");
+  const ext = path.extname(mentah).toLowerCase() || mentah.toLowerCase();
+  return EKSTENSI_GAMBAR[ext] || null;
+}
 
 // Shell untuk eksekusi_terminal. Termux (tanpa root) tidak punya /bin, jadi
 // harus memakai bash bawaan prefix-nya. Di lingkungan lain (Linux/macOS
@@ -27,7 +60,8 @@ const SHELL_EKSEKUSI =
   : undefined; // biarkan Node memilih default
 
 // Daftar tools dalam format OpenAI function-calling
-export function daftarTools() {
+// ---------- TOOL BAWAAN (hardcoded, selalu ada) ----------
+function toolBawaan() {
   return [
     { type: "function", function: { name: "baca_file", description: "Membaca isi file lokal (teks/kode).", parameters: { type: "object", properties: { nama_file: { type: "string" } }, required: ["nama_file"] } } },
     { type: "function", function: { name: "tulis_file", description: "Membuat atau menimpa file. Backup otomatis dibuat bila file sudah ada.", parameters: { type: "object", properties: { nama_file: { type: "string" }, isi_kode: { type: "string" } }, required: ["nama_file", "isi_kode"] } } },
@@ -41,12 +75,141 @@ export function daftarTools() {
     { type: "function", function: { name: "baca_memori", description: "Membaca seluruh memori jangka panjang.", parameters: { type: "object", properties: {} } } },
     { type: "function", function: { name: "cari_web", description: "Mencari informasi terbaru di internet (DuckDuckGo) dan mengembalikan ringkasan hasil.", parameters: { type: "object", properties: { kueri: { type: "string" } }, required: ["kueri"] } } },
     { type: "function", function: { name: "ambil_url", description: "Mengambil isi halaman web / API (teks) dari sebuah URL.", parameters: { type: "object", properties: { url: { type: "string" }, maks_karakter: { type: "number" } }, required: ["url"] } } },
+    { type: "function", function: {
+      name: "baca_gambar",
+      description: "Membaca berkas GAMBAR dari mesin user (screenshot, foto, QR, grafik) lalu mengirimnya ke model. WAJIB memakai model yang mendukung VISION — panggil ini hanya bila model aktif sanggup melihat gambar. Kegunaan: membaca screenshot layar Termux, mengekstrak teks dari foto (OCR), memeriksa tampilan aplikasi, membaca grafik/plot, memeriksa QR code.",
+      parameters: {
+        type: "object",
+        properties: {
+          nama_file: { type: "string", description: "path gambar; relatif terhadap folder kerja, atau absolut, atau diawali ~/" },
+          instruksi: { type: "string", description: "apa yang ingin diketahui dari gambar, contoh: \"baca semua teks di dalamnya\" atau \"apakah tata letak ini rapi?\"" },
+        },
+        required: ["nama_file"],
+      },
+    } },
+
+    // ── TOOL META: agent membangun kemampuannya sendiri ──────────────────
+    { type: "function", function: {
+      name: "bikin_tool",
+      description: "MEMBUAT TOOL BARU secara permanen. Pakai ini bila kemampuan yang dibutuhkan belum ada di daftar tool — jangan menyerah karena tool belum tersedia. Tool yang dibuat langsung tersedia di giliran berikutnya tanpa restart. Tulis kode ESM lengkap di dalam `kode` (isi fungsi jalankan).",
+      parameters: {
+        type: "object",
+        properties: {
+          nama: { type: "string", description: "nama tool: huruf kecil, angka, garis bawah. contoh: cek_baterai" },
+          deskripsi: { type: "string", description: "penjelasan singkat KAPAN tool dipakai — ini yang dibaca model lain untuk memutuskan" },
+          parameter: { type: "object", description: "skema JSON parameter (format OpenAI). contoh: {\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}" },
+          kode: { type: "string", description: "ISI fungsi jalankan(args, ctx) — tanpa pembungkus fungsi. Boleh pakai await, ctx.eksekusi(perintah, timeoutDetik), ctx.cwd, ctx.home. Contoh: \"const {stdout} = await ctx.eksekusi('uname -a');\\nreturn {judul:'uname', detail:stdout, raw:stdout, ok:true};\" Bila dikosongkan, dibuat kerangka kosong." },
+          kategori: { type: "string", description: "kategori bebas untuk pengelompokan, contoh: sistem, jaringan, media" },
+        },
+        required: ["nama", "deskripsi"],
+      },
+    } },
+    { type: "function", function: {
+      name: "hapus_tool",
+      description: "Menghapus tool dinamis yang pernah dibuat. Tool bawaan tidak bisa dihapus.",
+      parameters: { type: "object", properties: { nama: { type: "string" } }, required: ["nama"] },
+    } },
+    { type: "function", function: {
+      name: "lihat_tool",
+      description: "Membaca sumber kode sebuah tool dinamis — untuk memeriksa atau memperbaiki tool yang sudah dibuat.",
+      parameters: { type: "object", properties: { nama: { type: "string" } }, required: ["nama"] },
+    } },
   ];
 }
 
+// Nama tool bawaan (dipakai untuk mencegah tool dinamis menimpa/menyamar
+// sebagai tool inti, dan untuk membedakan sumber kode di lihat_tool).
+const NAMA_BAWAAN = new Set(toolBawaan().map((t) => t.function?.name).filter(Boolean));
+
+// ---------- Peta kemampuan: tool → kemampuan yang dibutuhkan ----------
+// Dipakai router untuk menyimpulkan kebutuhan model dari tool yang SEDANG
+// dipanggil model, bukan dari tebakan kata di teks user. Sumbernya bukan
+// tebakan: `baca_gambar` memang hanya bisa bekerja pada model vision.
+export const TOOL_BUTUH_KAPABILITAS = {
+  baca_gambar: "vision",
+};
+
+/** Ekspor untuk pemakaian luar (index.js menampilkan "butuh X" di /tools). */
+export function kebutuhanTool(nama) {
+  return TOOL_BUTUH_KAPABILITAS[nama] || null;
+}
+
+/**
+ * Daftar tool LENGKAP: bawaan + tool dinamis hasil buatan agent.
+ *
+ * Dibuat async karena tool dinamis dibaca dari disk. Dipanggil ulang tiap
+ * giliran supaya tool yang baru dibuat agent langsung dikenali model —
+ * tanpa restart. Bila folder tool bermasalah, agent tetap jalan dengan
+ * tool bawaan saja (kegagalan tool dinamis tidak boleh fatal).
+ *
+ * `toolsInti` (bila diberikan) dipakai apa adanya sebagai ganti tool
+ * bawaan — jalur ini dipakai oleh eksekutor agar tidak ada perbedaan
+ * daftar antara yang dilihat model dan yang bisa dijalankan.
+ */
+export async function daftarToolsLengkap(opsi = {}) {
+  const inti = Array.isArray(opsi.toolsInti) ? opsi.toolsInti : toolBawaan();
+  try {
+    const dinamis = await muatToolDinamis();
+    // Tool dinamis TIDAK boleh menimpa tool bawaan: nama bentrok dilewati.
+    const namaInti = new Set(inti.map((t) => t.function?.name).filter(Boolean));
+    const tambahan = dinamis.filter((t) => !namaInti.has(t.meta.nama)).map(keSkema);
+    return [...inti, ...tambahan];
+  } catch {
+    return inti;
+  }
+}
+
+/** Versi sinkron (tool bawaan saja) — untuk pemanggil lama / tampilan cepat. */
+export function daftarTools() {
+  return toolBawaan();
+}
+
+/** Jalankan perintah shell dengan shell yang sudah terdeteksi Termux/Linux. */
+async function jalankanShell(perintah, { cwd, timeoutDetik = 120 } = {}) {
+  const timeout = Math.min(Math.max(Number(timeoutDetik) || 120, 1), 900) * 1000;
+  return execAsync(perintah, {
+    cwd,
+    timeout,
+    maxBuffer: 20 * 1024 * 1024,
+    shell: SHELL_EKSEKUSI,
+  });
+}
+
+/**
+ * Bisa-tidaknya sebuah tool dinamis dijalankan oleh agent ini.
+ * Tool dinamis punya hak yang sama dengan tool bawaan — memang tujuannya.
+ * Bila opsi.izinkanToolDinamis === false, tool dinamis tidak dijalankan.
+ */
 export function buatEksekutor(cfg, opsi = {}) {
   const cwd = opsi.cwd || process.cwd();
   const izinkanHapus = opsi.izinkanHapus !== false;
+  const izinkanToolDinamis = opsi.izinkanToolDinamis !== false;
+
+  // Wadah gambar terakhir yang berhasil dimuat oleh case "baca_gambar".
+  // Diambil agen lewat jalankanTool.ambilGambarTerakhir().
+  let gambarTerakhir = null;
+
+  /** Perluas "~" tanpa melempar galat (dipakai ctx, bukan validasi input). */
+  function kePathKasar(p) {
+    const s = String(p ?? "");
+    if (s === "~") return HOME;
+    if (s.startsWith("~/")) return path.join(HOME, s.slice(2));
+    return path.resolve(cwd, s);
+  }
+
+  /** Konteks yang diberikan ke kode tool dinamis. */
+  const ctxTool = {
+    cwd,
+    home: HOME,
+    cfg,
+    // Pembungkus tipis supaya tool buatan agent tidak perlu impor child_process
+    // sendiri — cukup ctx.eksekusi("perintah").
+    eksekusi: (perintah, timeoutDetik) => jalankanShell(perintah, { cwd, timeoutDetik }),
+    // Baca/tulis file juga sering dibutuhkan; disediakan agar tool dinamis ringkas.
+    baca: (p) => fs.readFile(kePathKasar(p), "utf-8"),
+    tulis: async (p, isi) => { const t = kePathKasar(p); await fs.mkdir(path.dirname(t), { recursive: true }); return fs.writeFile(t, isi); },
+    jalankanShell: (perintah, timeoutDetik) => jalankanShell(perintah, { cwd, timeoutDetik }),
+  };
 
   /**
    * Samakan penanganan path untuk SEMUA tool file.
@@ -63,7 +226,53 @@ export function buatEksekutor(cfg, opsi = {}) {
     return path.resolve(cwd, s);
   }
 
-  return async function jalankanTool(call) {
+  /**
+   * Latih berkas gambar menjadi pesan user multipart (format vision OpenAI).
+   * Dipakai case "baca_gambar". Menyimpan hasilnya di closure supaya
+   * agent.js bisa mengambilnya lewat `ambilGambarTerakhir()`.
+   */
+  async function siapkanGambar(nama, instruksi) {
+    const p = kePath(nama);
+    const mime = mimeGambar(p);
+    if (!mime) {
+      const ext = path.extname(p) || "(tanpa ekstensi)";
+      throw new Error(`Ekstensi "${ext}" bukan gambar yang didukung (${Object.keys(EKSTENSI_GAMBAR).join(", ")}).`);
+    }
+    const stat = await fs.stat(p).catch(() => null);
+    if (!stat || !stat.isFile()) throw new Error(`Berkas gambar tidak ditemukan: ${p}`);
+    if (stat.size > BATAS_GAMBAR) {
+      throw new Error(`Gambar terlalu besar (${(stat.size / 1048576).toFixed(1)} MB). Batas ${BATAS_GAMBAR / 1048576} MB.`);
+    }
+    const data64 = (await fs.readFile(p)).toString("base64");
+    const tanya = String(instruksi || "").trim() || "Jelaskan isi gambar ini secara rinci. Bila ada teks, tuliskan apa adanya.";
+    const pesan = {
+      role: "user",
+      content: [
+        { type: "text", text: tanya },
+        { type: "image_url", image_url: { url: `data:${mime};base64,${data64}` } },
+      ],
+    };
+    gambarTerakhir = pesan;
+    return { berkas: p, bytes: stat.size, mime, pesan };
+  }
+
+  /**
+   * Ambil pesan gambar yang baru dilampirkan (satu kali pakai).
+   * Agent memanggil ini setelah menjalankan tool: bila ada isinya, pesan itu
+   * DISISIPKAN setelah hasil tool supaya model vision membacanya di giliran
+   * yang sama — bukan menunggu user menjelaskan isi gambar.
+   * (Properti ini dipasang SETELAH deklarasi jalankanTool — lihat bawah.)
+   */
+  function ambilGambarTerakhir() {
+    const g = gambarTerakhir;
+    gambarTerakhir = null;
+    return g;
+  }
+
+  // CATATAN: jangan pakai `return async function jalankanTool` di sini —
+  // itu mengakhiri buatEksekutor dan kode pemasangan properti di bawah
+  // (jalankanTool.ambilGambarTerakhir) tidak akan pernah dieksekusi.
+  const jalankanTool = async function (call) {
     let args = {};
     try {
       args = call.function?.arguments ? JSON.parse(call.function.arguments) : {};
@@ -264,13 +473,107 @@ export function buatEksekutor(cfg, opsi = {}) {
           return { judul: `URL → ${args.url} (HTTP ${res.status})`, detail: singkat(potong, 600), raw: potong, ok: true };
         }
 
-        default:
+        case "baca_gambar": {
+          try {
+            const siap = await siapkanGambar(args.nama_file, args.instruksi);
+            // Sinyal ke agen: sisipkan pesan multipart ini SETELAH hasil tool.
+            return {
+              judul: `Gambar → ${path.basename(siap.berkas)} (${(siap.bytes / 1024).toFixed(0)} KB)`,
+              detail: "Gambar siap dikirim ke model vision pada giliran berikutnya.",
+              raw: `Gambar "${siap.berkas}" (${(siap.bytes / 1024).toFixed(0)} KB) berhasil dimuat dan dilampirkan sebagai pesan gambar. Baca isinya pada giliran ini juga — jangan minta user menjelaskan gambarnya.`,
+              ok: true,
+              // Dipakai agen untuk menyisipkan pesan multipart (bukan JSON).
+              pesanGambar: siap.pesan,
+            };
+          } catch (e) {
+            return { judul: "baca_gambar gagal", detail: e.message, raw: `Error: ${e.message}`, ok: false };
+          }
+        }
+
+        // ── TOOL META: agent membangun & mengelola kemampuannya sendiri ────
+        case "bikin_tool": {
+          if (!izinkanToolDinamis) {
+            return { judul: "bikin_tool diblokir", detail: "Tool dinamis dimatikan.", raw: "Error: pembuatan tool dinonaktifkan pada mode ini.", ok: false };
+          }
+          const hasil = await simpanTool({
+            nama: args.nama,
+            deskripsi: args.deskripsi,
+            parameter: args.parameter,
+            kode: args.kode,
+            kategori: args.kategori,
+          });
+          if (!hasil.ok) {
+            return { judul: `bikin_tool gagal → ${args.nama}`, detail: hasil.pesan, raw: `Error: ${hasil.pesan}`, ok: false };
+          }
+          const pesan = `${hasil.pesan} Tool langsung tersedia pada giliran berikutnya — panggil saja "${args.nama}" untuk mengujinya. Bila perlu perbaiki, gunakan lihat_tool lalu bikin_tool ulang dengan kode yang sama (nama sama = ditimpa).`;
+          return { judul: `Tool baru → ${args.nama}`, detail: pesan, raw: pesan, ok: true };
+        }
+
+        case "hapus_tool": {
+          const hasil = await hapusTool(args.nama);
+          return {
+            judul: hasil.ok ? `Hapus tool → ${args.nama}` : `Gagal hapus ${args.nama}`,
+            detail: hasil.pesan,
+            raw: hasil.ok ? hasil.pesan : `Error: ${hasil.pesan}`,
+            ok: hasil.ok,
+          };
+        }
+
+        case "lihat_tool": {
+          if (!namaSah(args.nama)) return { judul: "lihat_tool", detail: "", raw: `Error: nama tool tidak sah: "${args.nama}".`, ok: false };
+          if (NAMA_BAWAAN.has(args.nama)) {
+            return { judul: `lihat_tool → ${args.nama}`, detail: `${args.nama} adalah tool BAWAAN (ada di src/tools/tools.js).`, raw: `${args.nama} adalah tool bawaan; sumbernya di src/tools/tools.js, bukan berkas tool dinamis.`, ok: true };
+          }
+          try {
+            const berkas = path.join(DIR_TOOL, `${args.nama}.tool.js`);
+            const isi = await fs.readFile(berkas, "utf-8");
+            return { judul: `lihat_tool → ${args.nama}`, detail: singkat(isi, 500), raw: isi, ok: true };
+          } catch {
+            // Bukan tool dinamis — mungkin tool dinamis gagal dimuat; sebutkan galatnya.
+            const galat = galatTool().filter((g) => g.includes(args.nama));
+            const pesan = galat.length
+              ? `Tool "${args.nama}" gagal dimuat:\n${galat.join("\n")}`
+              : `Tool "${args.nama}" tidak ditemukan di ${DIR_TOOL}.`;
+            return { judul: `lihat_tool → ${args.nama}`, detail: pesan, raw: `Error: ${pesan}`, ok: false };
+          }
+        }
+
+        default: {
+          // ── FALLBACK: tool dinamis buatan agent ─────────────────────────
+          // Tool bawaan tidak dikenali di switch, coba cari di registry.
+          if (izinkanToolDinamis && namaSah(nama) && !NAMA_BAWAAN.has(nama)) {
+            const dinamis = await muatToolDinamis();
+            const t = dinamis.find((x) => x.meta.nama === nama);
+            if (t) {
+              try {
+                const keluaran = await t.jalankan(args, ctxTool);
+                const b = keluaran && typeof keluaran === "object" ? keluaran : { raw: String(keluaran) };
+                return {
+                  judul: b.judul || `Tool dinamis → ${nama}`,
+                  detail: b.detail ?? singkat(String(b.raw ?? ""), 500),
+                  raw: b.raw ?? "",
+                  ok: b.ok !== false,
+                };
+              } catch (e) {
+                const pesan = `Tool dinamis "${nama}" gagal: ${e.message}. Perbaiki dengan lihat_tool lalu bikin_tool ulang.`;
+                return { judul: `Tool dinamis gagal → ${nama}`, detail: e.message, raw: `Error: ${pesan}`, ok: false };
+              }
+            }
+          }
           return { judul: `Tool tidak dikenal: ${nama}`, detail: "", raw: `Error: tool "${nama}" tidak dikenal.`, ok: false };
+        }
       }
     } catch (e) {
       return { judul: `Tool gagal: ${nama}`, detail: e.message, raw: `Error: ${e.message}`, ok: false };
     }
   };
+
+  // Dipasang setelah deklarasi fungsi (hoisting tidak berlaku untuk properti).
+  jalankanTool.ambilGambarTerakhir = ambilGambarTerakhir;
+  return jalankanTool;
 }
 
-export { HOME };
+export { HOME, DIR_TOOL, BATAS_GAMBAR };
+// Re-ekspor supaya pemanggil lama (index.js) tetap bisa memakai jalur async
+// tanpa harus tahu ada modul registry di baliknya.
+export { daftarToolDinamis, galatTool };
