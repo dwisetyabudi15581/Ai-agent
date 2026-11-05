@@ -1,0 +1,14 @@
+# Rahasia — JANGAN pernah commit
+.env
+
+# Dependensi & cache
+node_modules/
+cache-model.json
+*.log
+
+# Hasil uji sementara
+tmp-uji/
+*.out
+*.bak
+uji-edit.txt
+.agen-uji*.mjs
