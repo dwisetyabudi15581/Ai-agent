@@ -78,40 +78,60 @@ const agen = await buatAgen({ cfg, tools, eksekusiTool, sesi });
 
 // ===================== LAYAR =====================
 function header() {
-  const lebar = Math.min(process.stdout.columns || 80, 100) - 4;
-  const garisAtas = "═".repeat(Math.max(lebar, 40));
+  const W = Math.min(process.stdout.columns || 80, 100) - 4;
+  const lebarKotak = Math.max(W, 40);
+  const garisAtas = "─".repeat(lebarKotak);
   console.clear();
-  tulis(`${C.cyan}${garisAtas}${C.reset}`);
-  tulis(`${C.bold}${C.cyan}  🤖  AGENT TERMUX v3.2${C.reset}`);
+
+  // Judul bergradien (biru → ungu) agar terasa hidup.
+  tulis("");
+  tulis(`  ${C.aksen}${C.bold}◆${C.reset}  ${C.bold}${C.aksen}A${C.aksen2}G${C.emas}E${C.jingga}N${C.ungu}T${C.reset} ${C.samar}${C.dim}·${C.reset} ${C.bold}Termux AI${C.reset} ${C.samar}v3.3${C.reset}`);
+  tulis(`  ${C.samar}${garisAtas}${C.reset}`);
+
   const router = cfg.modelTerkunci
-    ? "manual (dikunci)"
-    : cfg.routingOtomatis ? "otomatis" : "mati";
-  tulis(`${C.gray}  model: ${C.reset}${C.bold}${cfg.model}${C.reset}${C.gray} · router: ${C.reset}${C.bold}${router}${C.reset}${C.gray} · mode: ${C.reset}${C.bold}${mode === "teman" ? "teman ngobrol" : "agen otonom"}${C.reset}${C.gray} · sesi: ${sesi.id}${C.reset}`);
-  tulis(`${C.cyan}${garisAtas}${C.reset}`);
-  tulis(`${C.gray}  /help daftar perintah · /model ganti model · /router setelan otomatis · /quit keluar${C.reset}`);
+    ? `${C.emas}manual`
+    : cfg.routingOtomatis ? `${C.aksen2}otomatis` : `${C.samar}mati`;
+  const modeTeks = mode === "teman" ? `${C.aksen2}teman ngobrol` : `${C.ungu}agen otonom`;
+
+  tulis(`  ${C.samar}model${C.reset}  ${C.bold}${C.white}${cfg.model}${C.reset}`);
+  tulis(`  ${C.samar}router ${C.reset}${router}${C.reset}   ${C.samar}mode${C.reset} ${modeTeks}${C.reset}   ${C.samar}sesi${C.reset} ${C.samar}${sesi.id}${C.reset}`);
+  tulis(`  ${C.samar}${garisAtas}${C.reset}`);
+  tulis(`  ${C.samar}${C.dim}petunjuk:${C.reset} ${C.samar}/help${C.reset} ${C.dim}semua perintah${C.reset}  ${C.samar}·${C.reset} ${C.samar}/model${C.reset} ${C.dim}ganti AI${C.reset}  ${C.samar}·${C.reset} ${C.samar}/quit${C.reset} ${C.dim}keluar${C.reset}`);
+  tulis("");
 }
 
 function bantuan() {
-  panel("PERINTAH", [
-    `${C.bold}/model${C.reset} ${C.gray}[semua|nomor|id|cari <kata>]${C.reset}  ganti model AI`,
-    `${C.bold}/router${C.reset} ${C.gray}[on|off]${C.reset}   model dipilih otomatis per giliran`,
-    `${C.bold}/tools${C.reset}            daftar kemampuan agent`,
-    `${C.bold}/memori${C.reset}           lihat memori jangka panjang`,
-    `${C.bold}/lupakan${C.reset}          hapus semua memori`,
-    `${C.bold}/sesi${C.reset}             daftar sesi tersimpan`,
-    `${C.bold}/lanjut <id>${C.reset}      buka sesi lama`,
-    `${C.bold}/simpan${C.reset} ${C.gray}|${C.reset} ${C.bold}/baru${C.reset}     simpan / mulai sesi baru`,
-    `${C.bold}/ringkas${C.reset}          ringkas riwayat sekarang`,
-    `${C.bold}/teman${C.reset} ${C.gray}|${C.reset} ${C.bold}/agen${C.reset}     ganti mode`,
-    `${C.bold}/stream${C.reset} ${C.gray}|${C.reset} ${C.bold}/nostream${C.reset}  mode balasan`,
-    `${C.bold}/suhu <0-2>${C.reset}      kreativitas`,
-    `${C.bold}/maxtoken <n>${C.reset}    batas panjang jawaban`,
-    `${C.bold}/putaran <n|0>${C.reset}    batas putaran/giliran (0 = tanpa batas)`,
-    `${C.bold}/maksTool <n|0>${C.reset}    batas total tool/giliran (0 = tanpa batas)`,
-    `${C.bold}/verbose${C.reset}          info token & reasoning`,
-    `${C.bold}/biaya${C.reset}            estimasi kuota token sesi ini`,
-    `${C.bold}/clear${C.reset} ${C.gray}|${C.reset} ${C.bold}/quit${C.reset}       bersihkan layar / keluar`,
-  ]);
+  const baris = [
+    `${C.ungu}${C.bold}  Model & Router${C.reset}`,
+    `  ${C.emas}/model${C.reset} ${C.samar}[semua|nomor|id|cari <kata>]${C.reset}  ganti model AI`,
+    `  ${C.emas}/router${C.reset} ${C.samar}[on|off]${C.reset}   pilih model otomatis per giliran`,
+    `  ${C.emas}/biaya${C.reset}            estimasi kuota token sesi ini`,
+    ``,
+    `${C.ungu}${C.bold}  Sesi & Riwayat${C.reset}`,
+    `  ${C.emas}/sesi${C.reset}             daftar sesi tersimpan`,
+    `  ${C.emas}/lanjut <id>${C.reset}      buka sesi lama`,
+    `  ${C.emas}/simpan${C.reset} ${C.samar}|${C.reset} ${C.emas}/baru${C.reset}     simpan / mulai sesi baru`,
+    `  ${C.emas}/ringkas${C.reset}          ringkas riwayat sekarang`,
+    ``,
+    `${C.ungu}${C.bold}  Memori & Kemampuan${C.reset}`,
+    `  ${C.emas}/tools${C.reset}            daftar kemampuan agent`,
+    `  ${C.emas}/memori${C.reset}           lihat memori jangka panjang`,
+    `  ${C.emas}/lupakan${C.reset}          hapus semua memori`,
+    ``,
+    `${C.ungu}${C.bold}  Gaya & Mode${C.reset}`,
+    `  ${C.emas}/teman${C.reset} ${C.samar}|${C.reset} ${C.emas}/agen${C.reset}     ganti mode`,
+    `  ${C.emas}/stream${C.reset} ${C.samar}|${C.reset} ${C.emas}/nostream${C.reset}  mode balasan`,
+    `  ${C.emas}/verbose${C.reset}          info token & reasoning`,
+    `  ${C.emas}/clear${C.reset} ${C.samar}|${C.reset} ${C.emas}/quit${C.reset}       bersihkan layar / keluar`,
+    ``,
+    `${C.ungu}${C.bold}  Parameter Model${C.reset}`,
+    `  ${C.emas}/suhu <0-2>${C.reset}      kreativitas (0 = kaku, 2 = liar)`,
+    `  ${C.emas}/maxtoken <n>${C.reset}    batas panjang jawaban`,
+    `  ${C.emas}/putaran <n|0>${C.reset}    batas putaran/giliran (0 = tanpa batas)`,
+    `  ${C.emas}/maksTool <n|0>${C.reset}    batas total tool/giliran (0 = tanpa batas)`,
+    `  ${C.emas}/batas${C.reset}            lihat batas aktif`,
+  ];
+  panel("DAFTAR PERINTAH", baris, { warna: C.ungu });
 }
 
 // ===================== PERINTAH =====================
@@ -382,7 +402,7 @@ async function main() {
   let giliran = 0;
 
   while (true) {
-    const input = await tanyaTeks(`\n${C.bold}${C.green}👤 ${cfg.namaUser}${C.reset} ${C.gray}›${C.reset} `);
+    const input = await tanyaTeks(`\n${C.aksen2}${C.bold}❯ ${cfg.namaUser}${C.reset} ${C.samar}›${C.reset} `);
     if (input === null) { // EOF / Ctrl+D
       tutupInput();
       await keluarAman("Ctrl+D", 0);

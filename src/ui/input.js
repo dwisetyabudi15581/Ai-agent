@@ -32,7 +32,7 @@ export function mulaiInput() {
   // process "SIGINT" di ui/keluar.js yang menangani (simpan sesi lalu keluar).
   rl.on("SIGINT", () => {
     if (peminta) return; // siklus input aktif → tangani lewat process SIGINT
-    tulis(`\n${C.gray}Ketik /quit untuk keluar.${C.reset}`);
+    tulis(`\n${C.samar}Ketik /quit untuk keluar.${C.reset}`);
   });
 }
 
