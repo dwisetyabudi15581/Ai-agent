@@ -24,6 +24,32 @@ export const DEFAULT_CONFIG = {
   streamDefault: true,
   autoCompact: true,
   batasKonteks: 60000,
+  // ---------- PENGHEMAT TOKEN ----------
+  // Batas keluaran tool (karakter) yang dikirim balik ke model sebagai
+  // pesan role:tool. Keluaran tool TINGGAL DI RIWAYAT selamanya (dikirim
+  // ulang di setiap putaran), jadi satu `cat` file 40KB = 40KB × jumlah
+  // putaran sisa. Output utuh tetap dilihat user di layar lewat `detail`;
+  // yang dipotong hanya versi yang masuk konteks model.
+  // 0 = tanpa batas (perilaku lama).
+  batasOutputTool: 8000,
+  // Riwayat yang disisakan saat meringkas. Terlalu besar = ringkasan tak
+  // berguna; terlalu kecil = konteks tugas hilang. 6 = titik seimbang.
+  simpanRiwayat: 6,
+  // Berapa pesan tool TERAKHIR yang isinya dibiarkan UTUH saat riwayat
+  // dikirim ke model. Sisanya (tool-tool yang sudah "basi") dipadatkan jadi
+  // satu baris ringkas — di sinilah penghematan token terbesar terjadi.
+  // 2 = tool terakhir + satu sebelumnya utuh (hasil terakhir sedang dipakai
+  // model untuk memutuskan langkah berikutnya). 0 = padatkan semua tool.
+  // Catatan: dulu bernama `padatkanToolLama` dengan arti TERBALIK
+  // ("pertahankan N tool terakhir") sehingga dengan 5 tool dalam satu sesi
+  // tidak ada yang pernah dipadatkan → penghematan 0%. Nama lama masih
+  // diterima sebagai alias, tapi jangan dipakai di kode baru.
+  jagaToolTerakhir: 2,
+  // Zona aman di ujung riwayat: sekian pesan terakhir TIDAK pernah dipadatkan
+  // apa pun perannya. Ini yang menjaga putaran tool-calling yang sedang
+  // berjalan tetap utuh (model masih butuh isi hasil terakhir untuk
+  // memutuskan langkah berikutnya).
+  jagaTerakhir: 4,
   // Batas per giliran. 0 = TANPA BATAS (agent berhenti saat tugas selesai,
   // atau saat terdeteksi mentok). Bukan angka mati: bisa diubah lewat
   // config.json, /putaran <n>, atau CLI --putaran <n>.
@@ -140,6 +166,22 @@ export async function muatConfig() {
   cfg.streamDefault = cfg.streamDefault !== false;
   cfg.autoCompact = cfg.autoCompact !== false;
   cfg.verbose = cfg.verbose === true;
+  cfg.batasOutputTool = keAngkaBebas(cfg.batasOutputTool, DEFAULT_CONFIG.batasOutputTool, 100000);
+  cfg.simpanRiwayat = keAngka(cfg.simpanRiwayat, DEFAULT_CONFIG.simpanRiwayat, 2, 40);
+  // Jumlah tool terakhir yang isinya dibiarkan utuh. 0 = padatkan semuanya.
+  // Batas atas 100: cukup besar untuk "praktis tidak memadatkan", tapi tidak
+  // sampai membuat riwayat membengkak tak terkendali karena salah ketik.
+  cfg.jagaToolTerakhir = keAngka(cfg.jagaToolTerakhir, DEFAULT_CONFIG.jagaToolTerakhir, 0, 100);
+  // Zona aman ekor: min 1 (pesan terakhir yang sedang diproses JANGAN pernah
+  // dipadatkan — itu pesan user/assistant aktif), maks 200.
+  cfg.jagaTerakhir = keAngka(cfg.jagaTerakhir, DEFAULT_CONFIG.jagaTerakhir, 1, 200);
+  // Kompatibilitas: config.json lama menyimpan `padatkanToolLama` dengan arti
+  // terbalik. Bila user belum punya `jagaToolTerakhir`, pakai nilai aliasnya
+  // supaya tidak diam-diam kembali ke perilaku 0%. Field lama tidak lagi
+  // ditulis ke disk (tidak ada di DEFAULT_CONFIG).
+  if (dariFile.jagaToolTerakhir === undefined && dariFile.padatkanToolLama !== undefined) {
+    cfg.jagaToolTerakhir = keAngka(dariFile.padatkanToolLama, DEFAULT_CONFIG.jagaToolTerakhir, 0, 100);
+  }
   cfg.routingOtomatis = cfg.routingOtomatis !== false;
   cfg.modelTerkunci = cfg.modelTerkunci === true;
 

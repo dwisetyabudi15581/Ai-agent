@@ -4,10 +4,12 @@ import path from "path";
 import { C, bubble, mulaiMengetik } from "../ui/util.js";
 import { DIR_DATA } from "../paths.js";
 import { panggilChat } from "../api/klien.js";
+import { riwayatUntukModel } from "../tools/tools.js";
 import { ambilKatalog } from "../api/katalog.js";
 import { systemPrompt } from "./prompt.js";
 import { muatMemori, sisipkanMemori } from "./memori.js";
 import { ringkasRiwayat, ukuranRiwayat } from "./sesi.js";
+import { buatPencatatToken } from "./statistik.js";
 import { pilihModel } from "./router.js";
 import { PenulisStream } from "../ui/tampilan.js";
 
@@ -44,6 +46,25 @@ export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
   const batasTotalTool =
     Number(cfg.maksTool) === 0 ? Infinity : Number(cfg.maksTool) || Infinity;
 
+  // Pencatat token: satu-satunya sumber angka di /token. Dibuat di sini
+  // supaya UI bisa membacanya kapan saja (agen.ringkasToken()).
+  const token = buatPencatatToken();
+  // Peta multiplier per model dari katalog — dipakai menghitung kuota terpotong.
+  // Dijaga di sini agar tidak memanggil katalog berulang tiap putaran.
+  const multModel = new Map();
+  let multSiap = false;
+
+  async function siapkanMultiplier() {
+    if (multSiap) return;
+    try {
+      const katalog = await ambilKatalog(cfg);
+      for (const m of katalog) multModel.set(m.id, m.multiplier ?? null);
+      multSiap = true;
+    } catch {
+      // katalog gagal → multiplier dianggap 1 (lebih baik daripada menebak)
+    }
+  }
+
   // System prompt disusun ulang tiap giliran agar memori & waktu tetap segar
   async function siapkanMessages(mode) {
     const memori = await muatMemori();
@@ -58,7 +79,10 @@ export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
     if (ukuran <= cfg.batasKonteks) return;
     const stop = mulaiMengetik("Meringkas riwayat lama");
     try {
-      sesi.messages = await ringkasRiwayat(cfg, sesi.messages, { simpan: 8 });
+      // simpanRiwayat dari config (dulu angka mati 8): menyisakan lebih
+      // sedikit pesan terakhir membuat ringkasan lebih sering berguna dan
+      // konteks yang dikirim ke model lebih kecil tanpa kehilangan arah tugas.
+      sesi.messages = await ringkasRiwayat(cfg, sesi.messages, { simpan: cfg.simpanRiwayat || 6 });
       bubble("info", `Riwayat diringkas otomatis (${ukuran} → ${ukuranRiwayat(sesi.messages)} karakter).`);
     } catch {
       /* gagal meringkas: biarkan apa adanya */
@@ -103,6 +127,20 @@ export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
   /** Satu giliran user: panggil model → jalankan tool → ulangi sampai selesai. */
   async function giliran(mode = "auto", teksUser = "") {
     await siapkanMessages(mode);
+    await siapkanMultiplier();
+
+    // Giliran terakhir sudah selesai pada panggilan sebelumnya, jadi semua
+    // pesan tool dari giliran itu kini "basi" — jangan ditahan lagi oleh zona
+    // aman. Tanpa baris ini, jagaToolTerakhir selalu melindungi ekor riwayat
+    // yang justru paling besar (satu giliran agent bisa 30+ pesan tool).
+    if (sesi.messages.length > cfg.jagaToolTerakhir + 6) {
+      const potongBasi = riwayatUntukModel(sesi.messages, {
+        jagaToolTerakhir: 0, // semua tool basi dipadatkan (tidak ada yang utuh)
+        jagaTerakhir: 1,     // hanya pesan terakhir yang kebal
+      });
+      sesi.messages = potongBasi;
+    }
+
     await autoCompact();
 
     // Model untuk seluruh giliran ini (null = pakai cfg.model apa adanya).
@@ -126,7 +164,20 @@ export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
 
       let hasil;
       try {
-        hasil = await panggilChat(cfg, sesi.messages, tools, {
+        // PENTING: yang dikirim ke model adalah PROYEKSI hasil pemadatan,
+        // bukan sesi.messages asli. Pesan tool lama dipangkas jadi satu baris
+        // ringkas (hemat token besar di sesi panjang), sedangkan `n` pesan
+        // tool terakhir tetap utuh sehingga penalaran berantai tidak rusak.
+        // sesi.messages sendiri TIDAK diubah → ringkasan & arsip tetap akurat.
+        const riwayatKirim = riwayatUntukModel(sesi.messages, {
+          jagaToolTerakhir: cfg.jagaToolTerakhir,
+          jagaTerakhir: cfg.jagaTerakhir,
+        });
+        // Ukur penghematan NYATA: panjang riwayat asli vs yang benar-benar
+        // dikirim. Angka ini yang muncul di /token — bukan tebakan.
+        token.catatPemadatan(sesi.messages, riwayatKirim);
+
+        hasil = await panggilChat(cfg, riwayatKirim, tools, {
           stream: cfg.streamDefault !== false,
           model: modelGiliran,
           maxTokens: cfg.maxTokens,
@@ -156,6 +207,9 @@ export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
         tokenMasuk += hasil.usage.prompt_tokens || 0;
         tokenKeluar += hasil.usage.completion_tokens || 0;
       }
+      // Catat ke pencatat sesi (angka PASTI dari API) + multiplier model yang
+      // benar-benar menjawab (router bisa mengganti model di tengah sesi).
+      token.catatPanggilan(hasil.usage, hasil.model || modelGiliran, multModel.get(hasil.model || modelGiliran));
 
       const pesan = hasil.pesan;
       sesi.messages.push(pesan);
@@ -271,7 +325,7 @@ export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
     return { selesai: jawabanTerakhir.length > 0, mentok: true };
   }
 
-  return { giliran };
+  return { giliran, ringkasToken: (multAktif) => token.ringkas(multAktif) };
 }
 
 // Simpan transkrip penuh untuk audit

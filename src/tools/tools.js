@@ -19,6 +19,32 @@ const execFileAsync = promisify(execFile);
 export const BATAS_OUTPUT_TERMINAL = 20000;
 export const BATAS_BACA_FILE = 40000;
 
+/**
+ * Potong isi tool SEBELUM masuk konteks model.
+ *
+ * PENTING — kenapa ini bukan sekadar "potong output": setiap keluaran tool
+ * disimpan sebagai pesan role:tool di `sesi.messages`, dan pesan itu DIKIRIM
+ * ULANG ke model pada setiap putaran berikutnya sampai sesi diringkas.
+ * Satu `cat` 40 KB yang dipanggil di putaran ke-2 dari 20 putaran = 40 KB
+ * × 19 kiriman. Batas ini memotong biaya itu di sumbernya.
+ *
+ * Yang dilihat user di layar (`detail`) TIDAK terpengaruh — hanya versi
+ * yang dibaca model yang dipotong. Kepala + ekor dipertahankan karena
+ * informasi penting biasanya ada di keduanya (awal output & pesan galat).
+ *
+ * @param {string} teks       keluaran mentah
+ * @param {number} batas      karakter; 0/undefined = tanpa batas
+ * @param {string} label      keterangan jenis keluaran (untuk pesan potong)
+ */
+export function potongUntukModel(teks, batas, label = "keluaran") {
+  const s = String(teks ?? "");
+  const n = Number(batas) || 0;
+  if (n <= 0 || s.length <= n) return s;
+  const kepala = Math.floor(n * 0.7);
+  const ekor = n - kepala;
+  return `${s.slice(0, kepala)}\n\n…(DIPOTONG: ${label} total ${s.length} karakter, hanya ${n} pertama+terakhir dikirim ke model. Untuk melihat bagian lain, panggil ulang dengan perintah yang lebih spesifik — mis. head/tail/sed -n/grep — jangan baca ulang seluruhnya.)\n\n${s.slice(-ekor)}`;
+}
+
 // ---------- BACA GAMBAR (vision) ----------
 // PENTING: kedua konstanta ini HARUS berada di atas buatEksekutor.
 // `const` tidak di-hoist seperti `function` — bila diletakkan di bawah,
@@ -164,6 +190,467 @@ export function daftarTools() {
   return toolBawaan();
 }
 
+// ---------- PEMADATAN KONTEKS (penghemat token terbesar) ----------
+//
+// MASALAH
+// `sesi.messages` dikirim UTUH ke API pada setiap putaran tool-calling.
+// Semua pesan `role: "tool"` dari putaran-putaran sebelumnya ("sudah basi")
+// sebenarnya tidak lagi dibutuhkan: model hanya perlu tahu APA hasilnya,
+// bukan seluruh isi mentahnya. Tanpa pemadatan, satu sesi panjang bisa
+// mengirim puluhan KB isi file/terminal lama berulang kali.
+//
+// SOLUSI (nol efek terhadap kualitas kerja)
+// 1. Isi pesan tool lama dipotong ke SATU baris ringkas (judul + baris
+//    pertama yang informatif, maks ~180 karakter). Model tetap tahu tool
+//    apa dipanggil dan apa hasil pokoknya → tidak kehilangan jejak.
+// 2. Pesan tool dari putaran TERAKHIR (`jagaTerakhir`) dibiarkan UTUH,
+//    karena itu yang sedang dipakai model untuk memutuskan langkah
+//    berikutnya. Jadi penalaran berantai tidak terganggu.
+// 3. Pesan `tool_calls` assistant TIDAK disentuh sama sekali — pasangan
+//    tool_call_id tetap lengkap sehingga API tidak menolak permintaan.
+//
+// Hasil: penghematan besar pada sesi panjang, akurasi tetap 100% pada
+// langkah yang sedang dikerjakan.
+const BATAS_BASI = 180; // karakter per pesan tool yang dipadatkan
+// Ambang pemadatan untuk pesan assistant non-tool (narasi lama). Lebih longgar
+// dari pesan tool karena narasi carry penalaran, tapi tetap dibatasi supaya
+// sesi 30+ putaran tidak menggelembung linear tanpa akhir.
+const BATAS_ASST = 600;
+// Ambang pemadatan pesan `user` lama. Pesan user adalah INSTRUKSI — memangkasnya
+// jauh lebih berisiko daripada memangkas narasi assistant, jadi ambangnya
+// paling longgar (1200) dan penjagaannya paling ketat.
+//
+// Kenapa perlu sama sekali: pada sesi obrolan/diskusi panjang (tanpa satu pun
+// role "tool"), pesan user-lah pemegang beban dominan. Terukur pada sesi 40
+// putaran: user 101.759 char vs assistant 28.363 char setelah pemadatan →
+// 64% beban proyeksi tetap tersisa, rasio pertumbuhan hampir linear (3.6x per
+// 4x putaran). Pemadatan assistant saja TIDAK cukup.
+//
+// YANG DILINDUNGI (tidak pernah disentuh):
+//   1. Pesan user PERTAMA — biasaya berisi tugas/peran awal sesi.
+//   2. `jagaUserTerakhir` pesan user TERAKHIR — biasaya tugas yang sedang
+//      dikerjakan. Bawaan 3 (bukan 1) karena rangkaian instruksi berurutan
+//      (mis. "buat file" → "jalankan" → "perbaiki") baru bermakna bila utuh.
+//   3. Pesan di dalam zona `jagaTerakhir`.
+//   4. Pesan yang lebih pendek dari ambang (tidak ada yang bisa dihemat).
+const BATAS_USER = 1200;
+const JAGA_USER_TERAKHIR = 3;
+// Jendela pemadatan: berapa BANYAK pesan lama (di luar ekor terjaga) yang
+// boleh tinggal di proyeksi. Pemadatan ke ambang tetap saja TIDAK cukup —
+// jumlah pesannya tetap tumbuh linear, jadi total ikut linear meski lerengnya
+// lebih landai. Terukur sebelum opsi ini ada: kontribusi pesan lama naik
+// 47% (10 putaran) → 79% (40 putaran) → 86% (80 putaran) dari total proyeksi.
+//
+// Dengan jendela ini, proyeksi berhenti tumbuh: yang tertinggal hanya
+// `jendelaPadat` pesan lama terbaru. Pesan yang DIBUANG dicatat sebagai
+// pengganti satu baris ("…[N pesan lama dipadatkan]") sehingga model tahu ada
+// riwayat yang diringkas, bukan seolah tidak pernah terjadi.
+//
+// 0 = matikan pembuangan (kembali ke perilaku "pangkas saja").
+const JENDELA_PADAT = 24;
+// Pesan assistant pembuka blok tool: isi teksnya dipangkas ke batas ini,
+// sementara array `tool_calls`-nya dibiarkan utuh (id harus lengkap agar API
+// menerima request). Argumen panggilan tool memang cenderung tumbuh tiap
+// putaran, jadi bagian inilah yang paling cepat membengkakkan riwayat.
+const BATAS_CALL = 300;
+// Pesan yang DIBUANG tidak boleh memutus pasangan assistant(tool_calls) ↔
+// tool(tool_call_id) — API menolak request bila pasangannya menggantung.
+// Blok panggilan tool karena itu selalu dipertahankan apa adanya.
+
+/**
+ * Padatkan pesan tool yang sudah "basi" menjadi satu baris ringkas.
+ *
+ * SEMANTIK (dibuat eksplisit — versi lama salah arah dan mengakibatkan
+ * NOL pemadatan pada kasus nyata):
+ *
+ *   jagaToolTerakhir : berapa pesan tool TERAKHIR yang dibiarkan UTUH.
+ *                      Ini satu-satunya penjaga yang penting — hanya hasil
+ *                      tool paling akhir yang sedang dipakai model untuk
+ *                      memutuskan langkah berikutnya.
+ *   jagaTerakhir     : jumlah pesan ekor (semua peran) yang kebal pemadatan.
+ *                      Dipakai HANYA untuk giliran yang sedang berjalan.
+ *
+ * Versi lama memakai `padatkanToolLama = 8` sebagai "jumlah tool terakhir yang
+ * dipertahankan" — dengan 5 tool dalam sesi, `5 - 8 <= 0` sehingga TIDAK ADA
+ * pesan tool yang pernah dipadatkan (penghematan 0%). Sekarang parameternya
+ * `jagaToolTerakhir` (bawaan 2): semua tool sisanya dipadatkan, berapa pun
+ * panjang sesinya.
+ *
+ * `padatkanToolLama` masih diterima sebagai alias lama agar pemanggil yang
+ * belum diperbarui tidak diam-diam kehilangan pemadatan.
+ */
+export function padatkanRiwayat(messages, opsi = {}) {
+  if (!Array.isArray(messages)) return messages;
+
+  // Bawaan sengaja konservatif: 2 tool terakhir utuh → penalaran berantai aman,
+  // sisanya dipadatkan. 0 = matikan pemadatan sepenuhnya.
+  const jaga =
+    opsi.jagaToolTerakhir != null ? Number(opsi.jagaToolTerakhir)
+    : opsi.padatkanToolLama != null ? Number(opsi.padatkanToolLama) // alias lama
+    : 2;
+  if (!Number.isFinite(jaga)) return messages;
+  // Nilai besar = "jangan padatkan apa pun" (dipakai jalur yang memang ingin
+  // riwayat utuh). Diterjemahkan sebelum perhitungan agar tidak overflow.
+  if (jaga >= messages.length) return messages;
+
+  if (jaga < 0) return messages;
+
+  // Kumpulkan indeks pesan tool, dari yang PALING LAMA ke paling baru.
+  // CATATAN: TIDAK ADA `return messages` di sini walau kosong. Sesi murni
+  // naratif (tanpa satu pun role "tool") dulu lolos utuh dan tumbuh tanpa
+  // batas — justru sesi itulah yang paling perlu dipadatkan di sisi assistant.
+  const idxTool = [];
+  messages.forEach((m, i) => { if (m?.role === "tool") idxTool.push(i); });
+  const kandidat = jaga > 0 ? idxTool.slice(0, Math.max(0, idxTool.length - jaga)) : idxTool;
+
+  // Zona aman ekor (lihat doc di atas).
+  const batasAman = messages.length - (Number(opsi.jagaTerakhir) || 0);
+
+  const target = new Set(kandidat.filter((i) => i < batasAman));
+
+  // ── SISI ASSISTANT: kebocoran terbesar di sesi panjang ────────────────────
+  // Pemadatan lama hanya menyentuh role "tool" — padahal di sesi agent nyata
+  // role "assistant" (narasi + argumen tool_call) justru 3-5x lebih besar.
+  // Hasil terukur: 81% beban riwayat tak pernah tersentuh, rasio mentok ~69%.
+  //
+  // Yang WAJIB dilindungi pada pesan assistant:
+  //   1. Pesan yang memuat tool_calls → bloK-nya harus utuh. Kalau tool_calls
+  //      dibuang, pasangan tool_call_id ikut hilang dan API menolak request.
+  //   2. z.B. putaran terakhir tetap utuh agar model ingat langkah terkininya.
+  //  Isi teksnya boleh dipangkas; hanya .content yang disentuh.
+  const batasAsst = Number.isFinite(Number(opsi.batasAssistant))
+    ? Number(opsi.batasAssistant)
+    : BATAS_ASST;
+  if (batasAsst > 0) {
+    for (let i = 0; i < Math.min(batasAman, messages.length); i++) {
+      const m = messages[i];
+      if (m?.role !== "assistant") continue;
+      if (m.tool_calls?.length) {
+        // Pesan pembuka blok tool: isinya (argumen panggilan) ikut besar dan
+        // tumbuh tiap putaran. Boleh dipangkas, TAPI tool_calls wajib utuh —
+        // satu id hilang = API menolak seluruh request.
+        const isi = String(m.content || "").replace(/\s+/g, " ").trim();
+        if (isi.length > BATAS_CALL) target.add(i);
+        continue;
+      }
+      const isi = String(m.content || "").replace(/\s+/g, " ").trim();
+      if (isi.length <= batasAsst) continue;
+      target.add(i);
+    }
+  }
+  // Sisi tool lama: isi keluaran panjang ikut dipotong (perilaku lama — sudah
+  // ada, hanya ditegaskan di sini agar kandidat lamanya tidak lolos utuh).
+  for (const i of kandidat) {
+    if (i >= batasAman) continue;
+    target.add(i);
+  }
+
+  // ── SISI USER: penutup kebocoran pada sesi obrolan panjang ────────────────
+  // Role "user" sengaja paling akhir disentuh karena isinya adalah INSTRUKSI.
+  // Pada sesi ber-tool, bagian ini biasanya tidak melakukan apa pun (pesan user
+  // pendek); ia baru berarti di sesi naratif panjang, di mana setelah pemadatan
+  // assistant sisanya justru didominasi user.
+  const batasUser = Number.isFinite(Number(opsi.batasUser)) ? Number(opsi.batasUser) : BATAS_USER;
+  const jagaUser = Number.isFinite(Number(opsi.jagaUserTerakhir))
+    ? Number(opsi.jagaUserTerakhir)
+    : JAGA_USER_TERAKHIR;
+  if (batasUser > 0 && jagaUser >= 0) {
+    // Indeks pesan user dari yang PALING BARU → untuk menandai N terakhir.
+    const idxUser = [];
+    messages.forEach((m, i) => { if (m?.role === "user") idxUser.push(i); });
+    const kebalUser = new Set(
+      (jagaUser > 0 ? idxUser.slice(Math.max(0, idxUser.length - jagaUser)) : [])
+        .concat(idxUser.slice(0, 1)) // pesan user PERTAMA = tugas awal sesi
+    );
+    for (let i = 0; i < Math.min(batasAman, messages.length); i++) {
+      const m = messages[i];
+      if (m?.role !== "user") continue;
+      if (kebalUser.has(i)) continue;
+      if (String(m.content || "").length <= batasUser) continue;
+      target.add(i);
+    }
+  }
+
+  const dipadatkan = messages
+    .map((m, i) => {
+      if (!target.has(i)) return m;
+      const isi = String(m.content || "").replace(/\s+/g, " ").trim();
+      const batas =
+        m.role === "assistant" ? batasAsst
+        : m.role === "user" ? batasUser
+        : BATAS_BASI;
+      // Sudah singkat → biarkan apa adanya (tidak ada yang bisa dihemat).
+      if (isi.length <= batas) return m;
+      const ringkas = isi.slice(0, batas);
+      return { ...m, content: `${ringkas} …[dipadatkan: ${isi.length}→${batas} char]` };
+    })
+    // Buang pesan assistant yang benar-benar hampa (content null/kosong dan
+    // tanpa panggilan tool). Pesan seperti ini muncul dari pemadatan maupun
+    // pembuangan, dan hanya memakan slot tanpa memberi informasi apa pun.
+    .filter((m) => {
+      if (m?.role !== "assistant") return true;
+      const isi = typeof m.content === "string" ? m.content.trim() : "";
+      const adaCall = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
+      return !!(isi || adaCall);
+    });
+
+  // ── PENTING: filter di atas MEMBUANG elemen → indeks array bergeser. ──────
+  // Seluruh perhitungan di bawah (bolehBuang, blok, penjaga integritas) memakai
+  // indeks array, jadi indeks WAJIB diambil ulang dari `dipadatkan`, bukan dari
+  // `messages`. Kalau tidak, blok tool diambil dari posisi yang salah pada
+  // riwayat campuran → pembuangan tidak konsisten dan jendela tidak mengikat.
+  const indeksHidup = new Set(dipadatkan.map((_, i) => i));
+
+  // ── JENDELA: buang pesan lama agar pertumbuhan benar-benar berhenti ───────
+  // Tanpa langkah ini, proyeksi tetap naik linear (hanya lebih landai) karena
+  // jumlah pesan lama terus bertambah walau masing-masing sudah dipendekkan.
+  const jendela = Number.isFinite(Number(opsi.jendelaPadat)) ? Number(opsi.jendelaPadat) : JENDELA_PADAT;
+  if (!(jendela > 0)) return dipadatkan;
+  // Yang dihitung terhadap jendela adalah SEMUA pesan lama yang boleh dibuang,
+  // bukan hanya yang kebetulan sudah masuk himpunan `target`. BUG lama: ukuran
+  // diambil dari `target`, padahal pesan assistant ber-tool_calls dan blok tool
+  // sering TIDAK masuk target → jumlahnya selalu ≤ jendela → jendela tak pernah
+  // jalan (terukur: 76 pesan masuk, 76 pesan keluar, sama sekali tidak menyusut).
+  //
+  // Yang tidak boleh dibuang: pesan system, dan ekor terjaga (JAGA ekor).
+  // Perhitungan memakai `dipadatkan` (array yang benar-benar difilter di akhir),
+  // BUKAN `messages`, karena panjang keduanya bisa berbeda akibat penyaringan
+  // pesan assistant hampa. Zona ekor terjaga diukur dari panjang `dipadatkan`
+  // agar yang dilindungi tepat N pesan TERAKHIR dari proyeksi nyata.
+  const batasJendela = dipadatkan.length - (Number(opsi.jagaTerakhir) || 0);
+  const bolehBuang = [];
+  for (let i = 0; i < dipadatkan.length; i++) {
+    const m = dipadatkan[i];
+    if (!m || m.role === "system") continue; // instruksi: jangan pernah dibuang
+    if (i >= batasJendela) continue; // ekor terjaga
+    bolehBuang.push(i);
+  }
+  const bolehBuangSet = new Set(bolehBuang);
+  if (bolehBuang.length <= jendela) return dipadatkan;
+
+  // KUOTA vs JENDELA — bug yang membuat proyeksi tumbuh linear:
+  // dulu `terpakai` dibandingkan dengan `jendela` (24), sehingga yang dibuang
+  // selalu TEPAT 24 pesan berapa pun panjang sesinya:
+  //   p=40: asli 101 → out 77 | p=80: asli 201 → out 177
+  // Keluaran tetap naik karena yang dibuang tetap, sedangkan riwayat memanjang.
+  //
+  // MAKNA JENDELA YANG BENAR: berapa pesan lama yang boleh TERSISA di proyeksi.
+  // Jadi kuota buang = (jumlah pesan yang boleh dibuang) − jendela. Nilainya
+  // ikut tumbuh bersama riwayat, sehingga sisanya berhenti di sekitar `jendela`.
+  const kuotaBuang = bolehBuang.length - jendela;
+
+  // Kandidat buang: yang paling lama dulu (urutan indeks sudah kronologis).
+  const kandidatBuang = bolehBuang.slice(0, kuotaBuang);
+
+  // ── Satuan pembuangan = SATU BLOK TOOL, bukan satu pesan ────────────────
+  // Pesan assistant ber-`tool_calls` dan pesan `tool` yang menjawabnya adalah
+  // satu kesatuan: API menolak request bila salah satunya tertinggal. Jadi
+  // yang dihitung terhadap jendela haruslah BLOK, bukan pesan tunggal. Inilah
+  // akar bug "jendela kadang batal": dulu per pesan, lalu penjaga integritas
+  // terpaksa menyeret blok ke dalam himpunan buang — dan loop perluasannya
+  // salah arah sehingga himpunan buang membengkak sampai seluruh sesi
+  // (terukur: 80 putaran → 188 pesan keluar, bukan ~24).
+  //
+  // Peta id panggilan → indeks pesan yang memuatnya (assistant) dan yang
+  // menjawabnya (tool). Satu id boleh memiliki beberapa jawaban (tool paralel).
+  const idKeIndeks = new Map(); // id → { call: i|null, jawab: [i…] }
+  dipadatkan.forEach((m, i) => {
+    if (m?.tool_calls?.length) {
+      for (const c of m.tool_calls) {
+        const s = idKeIndeks.get(c.id) || { call: null, jawab: [] };
+        s.call = i;
+        idKeIndeks.set(c.id, s);
+      }
+    }
+    if (m?.role === "tool" && m.tool_call_id) {
+      const s = idKeIndeks.get(m.tool_call_id) || { call: null, jawab: [] };
+      s.jawab.push(i);
+      idKeIndeks.set(m.tool_call_id, s);
+    }
+  });
+
+  // Satuan blok: setiap id → himpunan indeks anggotanya. Pesan non-blok
+  // (narasi assistant, user, system) berdiri sendiri sebagai blok satu pesan.
+  const blokDariIndeks = new Map(); // indeks → Set(indeks anggota blok)
+  for (const [, s] of idKeIndeks) {
+    const anggota = new Set();
+    if (s.call != null) anggota.add(s.call);
+    s.jawab.forEach((j) => anggota.add(j));
+    for (const a of anggota) blokDariIndeks.set(a, anggota);
+  }
+
+  // Susun ulang: ambil kandidat dari yang paling lama, masukkan seluruh bloknya.
+  //
+  // PENTING — jangan `break` saat satu blok tidak muat. Sesi agent berisi
+  // campuran blok tool (2 pesan) dan pesan tunggal (1 pesan). Kalau kita
+  // berhenti di blok pertama yang melebihi sisa kuota, hampir seluruh kandidat
+  // lama tidak pernah dibuang → proyeksi tumbuh linear lagi (terukur: 40
+  // putaran → 70 pesan, 80 → 164, 120 → 257). Yang benar: LEWATI blok yang
+  // tidak muat dan lanjut ke kandidat berikutnya selama masih ada sisa kuota
+  // yang bisa memuat setidaknya satu blok.
+  //
+  // TIGA BUG yang diperbaiki di sini (semuanya hanya muncul di riwayat PANJANG,
+  // sehingga tidak terlihat pada uji pendek):
+  //
+  //  [A] ANGGOTA BLOK BISA DILEWATI → dibuang lalu diloloskan lagi.
+  //      `blokDariIndeks` dihitung pada `dipadatkan` — array HASIL penyaringan,
+  //      sementara `bolehBuang`/`kandidatBuang` memakai indeks `messages`.
+  //      Satu pesan saja yang tersaring di pangkal (mis. assistant hampa)
+  //      menggeser SELURUH indeks setelahnya, sehingga `blokDariIndeks.get(i)`
+  //      mengembalikan blok milik pesan LAIN — index bergeser satu.
+  //      Akibatnya ada anggota blok yang tidak pernah dimasukkan, lalu loop
+  //      berikutnya menemukannya lewat indeks lain → masuk dua kali.
+  //  [B] SATU INDEKS DIHITUNG DUA KALI → kuota jebol. Dulu penjaga
+  //      "sudah pernah dimasukkan lewat anggota lain" TIDAK ADA (`continue`
+  //      hanya bila i ∈ akanDibuang), padahal blok berukuran 2+ dipakai ulang
+  //      oleh anggota keduanya → `terpakai` bertambah, `akanDibuang` tidak.
+  //      Terukur: kuota=372 tetapi NYATA dibuang 398 (kelebihan 26) — dan yang
+  //      hilang termasuk pesan `user` yang seharusnya TIDAK PERNAH disentuh.
+  //  [C] PEMBUANGAN BISA DIBATALKAN PENJAGA INTEGRITAS → jendela tak mengikat.
+  //      Kandidat lama memakai potongan AWAL indeks; pada riwayat campuran
+  //      (user | assistant | user | assistant...) separuh batas blok tepat
+  //      memotong pasangan di indeks TERAKHIR kandidat. Penjaga integritas
+  //      lalu mengembalikan blok itu → sisa bertambah 2 → outN tidak pernah
+  //      stabil berapa pun panjang riwayat. Perbaikan: kandidat diambil dari
+  //      potongan awal TOKEN, sedangkan kuota diukur pada indeks TERAKHIR yang
+  //      benar-benar ikut dibuang. Bila token terakhir jatuh di TENGAH blok,
+  //      token itu mundur ke anggotanya yang paling awal.
+  //
+  // Kandidat = potongan awal, KUOTA = indeks ambil-terakhir yang sesungguhnya.
+  // Selisih keduanya membuat batas pembuangan SELALU jatuh di batas blok,
+  // sehingga tidak ada blok yang bisa menggantung dan batal dibuang.
+  const kandidatToken = kandidatBuang;
+  const batasKuota = kandidatToken.length
+    ? kandidatToken[kandidatToken.length - 1] + 1
+    : 0;
+
+  // HIMPUNAN BUANG HARUS KEBAL JENDELA (tetap, tidak berubah-ubah).
+  //
+  // Ini adalah keputusan desain yang menyelesaikan [C] secara tuntas, bukan
+  // tambal-sulam. Pendekatan lama ("kuota diukur pada indeks terakhir token")
+  // masih membuat pembuangan TIDAK KEBAL: pada riwayat campuran
+  // (user | assistant | user | assistant...), token terakhir sering jatuh
+  // TEPAT di assistant pembuka blok tool, sehingga indeks jawaban tool-nya
+  // (i+1) berada DI LUAR kandidat. Blok itu lalu ditolak ("tidak muat") →
+  // penjaga integritas tidak menemukan ketidakseimbangan (karena blok ditolak
+  // utuh) → hasilnya sisa riwayat bertambah dua → outN tidak stabil.
+  //
+  // Aturan baru yang lebih sederhana dan deterministik:
+  //   • blok LAMA di luar jendela → SELALU dibuang (bila seluruh anggotanya
+  //     boleh dibuang). Tidak ada kuota yang bisa menolaknya.
+  //   • blok yang menyeberangi jendela (satu anggota boleh, satu tidak) →
+  //     dilewati, bukan dibatalkan; tidak ada paksaan kuota, jadi tidak ada
+  //     pengembalian yang membatalkan hasil.
+  //   • pesan tunggal (narasi/user lama) tetap dihitung kuota agar sisanya
+  //     berhenti di sekitar `jendela`, bukan habis.
+  //
+  // Kata "lama" = SELURUH indeks blok < batasKuota, sehingga blok yang
+  // menyeberang batas tidak akan pernah setengah dibuang.
+  const akanDibuang = new Set();
+  let terpakaiBlok = 0;  // blok yang menyeberangi jendela (dibatasi kuota)
+  let terpakaiTunggal = 0; // pesan tunggal (dibatasi kuota)
+  for (const i of kandidatToken) {
+    if (akanDibuang.has(i)) continue;
+    if (!bolehBuangSet.has(i)) continue; // hanya pesan yang boleh dibuang
+    const blok = blokDariIndeks.get(i) || new Set([i]);
+    // SETIAP anggota blok harus boleh dibuang; satu saja yang terkunci
+    // (system / ekor terjaga) → seluruh blok dibatalkan sejak awal, tidak
+    // menunggu penjaga integritas di bawah.
+    if (![...blok].every((x) => bolehBuangSet.has(x))) continue;
+    // [B] Penjaga riwayat-timpa: blok yang SELURUH anggotanya sudah pernah
+    // dimasukkan tidak boleh menambah `terpakai` lagi.
+    const baru = [...blok].filter((x) => !akanDibuang.has(x));
+    if (baru.length === 0) continue;
+    // Blok yang seluruh anggotanya berada DI DALAM kandidat (indeks terbesar
+    // ≤ batasKuota) → dibuang tanpa syarat kuota. Inilah yang membuat jendela
+    // benar-benar mengikat pada riwayat panjang berisi banyak blok tool.
+    const dalamKandidat = [...blok].every((x) => x <= batasKuota - 1);
+    if (dalamKandidat && baru.length > 1) {
+      terpakaiBlok += baru.length;
+      baru.forEach((x) => akanDibuang.add(x));
+      continue;
+    }
+    // Sisanya (pesan tunggal, termasuk narasi/user lama) tetap dibatasi kuota
+    // total supaya proyeksi tidak habis — model masih perlu jangkar riwayat.
+    if (terpakaiTunggal + baru.length > kuotaBuang - terpakaiBlok) continue;
+    terpakaiTunggal += baru.length;
+    baru.forEach((x) => akanDibuang.add(x));
+  }
+
+  // Verifikasi akhir: pastikan tidak ada pasangan menggantung. Bila ada
+  // (mis. karena bentuk riwayat tak terduga), kembalikan ke sisa HANYA anggota
+  // blok yang bermasalah — bukan membatalkan seluruh pembuangan.
+  //
+  // BUG yang diperbaiki di sini: versi sebelumnya membaca id lewat
+  // `m.tool_calls?.[0]?.id` — HANYA panggilan PERTAMA. Pesan assistant dengan
+  // beberapa tool_calls (tool paralel) menyisakan id ke-2..n tanpa terverifikasi,
+  // sehingga blok yang seharusnya utuh bisa lolos terpotong dan API menolak
+  // request (terbukti: uji integrasi gagal, tool_call_id "t1" hilang).
+  //
+  // Aturan yang ditegakkan: setiap id HARUS muncul lengkap di sisi sisa atau
+  // lengkap di sisi buang. Bila id yang sama ada di dua sisi, SELURUH indeks
+  // yang memuat id itu dikembalikan ke sisi sisa.
+  const idKeIndeksVerif = new Map(); // id → [indeks yang memuatnya]
+  dipadatkan.forEach((m, i) => {
+    const ids = [];
+    if (m?.tool_calls?.length) for (const c of m.tool_calls) if (c?.id) ids.push(c.id);
+    if (m?.role === "tool" && m.tool_call_id) ids.push(m.tool_call_id);
+    for (const id of ids) {
+      const arr = idKeIndeksVerif.get(id) || [];
+      arr.push(i);
+      idKeIndeksVerif.set(id, arr);
+    }
+  });
+  let adaPutus = false;
+  for (const [, indeks] of idKeIndeksVerif) {
+    const semuaDibuang = indeks.every((i) => akanDibuang.has(i));
+    const semuaSisa = indeks.every((i) => !akanDibuang.has(i));
+    if (semuaDibuang || semuaSisa) continue; // konsisten
+    indeks.forEach((i) => akanDibuang.delete(i)); // putus → kembalikan seluruhnya
+    adaPutus = true;
+  }
+  if (adaPutus) {
+    // Setelah pengembalian, kuota bisa jadi belum terpakai penuh. Biarkan —
+    // integritas riwayat lebih penting daripada kuota persis. Pembuangan tetap
+    // jauh lebih besar daripada sebelum jendela ada, dan tetap mengikat karena
+    // sisa kandidat lama dibatasi kuota pada giliran berikutnya.
+  }
+
+  const jumlahDibuang = akanDibuang.size;
+  if (jumlahDibuang === 0) return dipadatkan;
+
+  const hasil = dipadatkan.filter((_, i) => !akanDibuang.has(i));
+  // Beri tahu model bahwa ada riwayat yang diringkas — bukan seolah percakapan
+  // baru dimulai. Penanda DITEMPELKAN ke pesan system pertama, bukan disisipkan
+  // sebagai pesan system terpisah: dua pesan system berdampingan membuat model
+  // ragu instruksi mana yang berlaku, dan API tertentu menolaknya.
+  // PENTING: penanda ditempel ke SALINAN objek system, bukan ke objek asli.
+  // Riwayat asli milik pemanggil dan dipakai lagi di giliran berikutnya; kalau
+  // objeknya disentuh langsung, penanda akan menumpuk tiap giliran dan isi
+  // sesi asli ikut rusak (terbukti di uji: "SESI ASLI: BERUBAH").
+  const posSistem = hasil.findIndex((m) => m?.role === "system");
+  if (posSistem >= 0) {
+    hasil[posSistem] = {
+      ...hasil[posSistem],
+      content: `${hasil[posSistem].content || ""}\n\n`
+        + `…[${jumlahDibuang} pesan lama dipadatkan karena konteks panjang. `
+        + `Pakai tool untuk membaca ulang bila detail itu dibutuhkan.]`,
+    };
+  }
+  return hasil;
+}
+
+/**
+ * Proyeksi riwayat yang AMAN dikirim ke model.
+ *
+ * Sengaja dibuat sebagai salinan dangkal berisi objek baru untuk pesan yang
+ * diubah — `sesi.messages` TIDAK pernah dimodifikasi, sehingga ringkasan,
+ * arsip transkrip, dan pemuatan sesi lama tetap memakai data asli.
+ */
+export function riwayatUntukModel(messages, opsi = {}) {
+  return padatkanRiwayat(messages, opsi);
+}
+
 /** Jalankan perintah shell dengan shell yang sudah terdeteksi Termux/Linux. */
 async function jalankanShell(perintah, { cwd, timeoutDetik = 120 } = {}) {
   const timeout = Math.min(Math.max(Number(timeoutDetik) || 120, 1), 900) * 1000;
@@ -184,6 +671,9 @@ export function buatEksekutor(cfg, opsi = {}) {
   const cwd = opsi.cwd || process.cwd();
   const izinkanHapus = opsi.izinkanHapus !== false;
   const izinkanToolDinamis = opsi.izinkanToolDinamis !== false;
+  // Batas keluaran tool yang masuk konteks model (0 = tanpa batas).
+  // Dibaca dari config agar bisa diubah tanpa menyentuh kode.
+  const batasKonteksTool = Number(cfg?.batasOutputTool) || 0;
 
   // Wadah gambar terakhir yang berhasil dimuat oleh case "baca_gambar".
   // Diambil agen lewat jalankanTool.ambilGambarTerakhir().
@@ -286,11 +776,13 @@ export function buatEksekutor(cfg, opsi = {}) {
         case "baca_file": {
           const target = kePath(args.nama_file);
           const isi = await fs.readFile(target, "utf-8");
-          const potong = isi.length > BATAS_BACA_FILE;
           return {
             judul: `Baca file → ${args.nama_file} (${isi.split("\n").length} baris)`,
             detail: singkat(isi, 500),
-            raw: potong ? isi.slice(0, BATAS_BACA_FILE) + `\n…(dipotong, total ${isi.length} karakter)` : isi,
+            // Dua lapis potong: 40 KB keras (keamanan), lalu batas konteks
+            // dari config (hemat token). Yang ke model hanya versi terpotong;
+            // user di layar tetap melihat cuplikan aslinya lewat `detail`.
+            raw: potongUntukModel(isi.slice(0, BATAS_BACA_FILE), batasKonteksTool, `isi ${args.nama_file}`),
             ok: true,
           };
         }
@@ -347,13 +839,15 @@ export function buatEksekutor(cfg, opsi = {}) {
             const keluaran = [stdout, stderr].filter(Boolean).join("\n") || "(tidak ada output)";
             return {
               judul: `Terminal → ${args.perintah}`,
+              // detail = yang dilihat USER di layar: tetap panjang (700 char)
+              // supaya user tahu output sebenarnya, walau yang ke model dipotong.
               detail: singkat(keluaran, 700),
-              raw: keluaran.length > BATAS_OUTPUT_TERMINAL ? keluaran.slice(0, BATAS_OUTPUT_TERMINAL) + `\n…(dipotong, total ${keluaran.length} karakter)` : keluaran,
+              raw: potongUntukModel(keluaran.slice(0, BATAS_OUTPUT_TERMINAL), batasKonteksTool, "output terminal"),
               ok: true,
             };
           } catch (e) {
             const keluaran = [e.stdout, e.stderr, `exit code: ${e.code ?? "?"}`, e.message].filter(Boolean).join("\n");
-            return { judul: `Terminal gagal → ${args.perintah}`, detail: singkat(keluaran, 700), raw: keluaran.slice(0, BATAS_OUTPUT_TERMINAL), ok: false };
+            return { judul: `Terminal gagal → ${args.perintah}`, detail: singkat(keluaran, 700), raw: potongUntukModel(keluaran, batasKonteksTool, "galat terminal"), ok: false };
           }
         }
 
@@ -370,7 +864,7 @@ export function buatEksekutor(cfg, opsi = {}) {
           return {
             judul: `Folder → ${args.path_direktori || "./"}`,
             detail: detail.join("\n") || "(kosong)",
-            raw: `Isi ${target}:\n` + detail.join("\n"),
+            raw: potongUntukModel(`Isi ${target}:\n` + detail.join("\n"), batasKonteksTool, "daftar folder"),
             ok: true,
           };
         }
@@ -395,7 +889,7 @@ export function buatEksekutor(cfg, opsi = {}) {
             let hasil = stdout || "(tidak ditemukan)";
             const baris = hasil.split("\n");
             if (baris.length > 60) hasil = baris.slice(0, 60).join("\n") + `\n…(dipotong, total ${baris.length} baris)`;
-            return { judul: `Cari "${pola}"`, detail: singkat(hasil, 600), raw: hasil, ok: true };
+            return { judul: `Cari "${pola}"`, detail: singkat(hasil, 600), raw: potongUntukModel(hasil, batasKonteksTool, "hasil grep"), ok: true };
           } catch (e) {
             // exit code 1 dari grep = tidak ada hasil (bukan galat nyata)
             if (e.code === 1) return { judul: `Cari "${pola}"`, detail: "(tidak ditemukan)", raw: "Tidak ada hasil cocok.", ok: true };
@@ -470,7 +964,7 @@ export function buatEksekutor(cfg, opsi = {}) {
             teks = teks.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
           }
           const potong = teks.slice(0, maks);
-          return { judul: `URL → ${args.url} (HTTP ${res.status})`, detail: singkat(potong, 600), raw: potong, ok: true };
+          return { judul: `URL → ${args.url} (HTTP ${res.status})`, detail: singkat(potong, 600), raw: potongUntukModel(potong, batasKonteksTool, `isi ${args.url}`), ok: true };
         }
 
         case "baca_gambar": {

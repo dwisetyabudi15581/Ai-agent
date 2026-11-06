@@ -27,6 +27,7 @@ import { ambilKatalog, ambilKatalogLengkap, infoPreset } from "./src/api/katalog
 import { panaskanFetch } from "./src/api/klien.js";
 import { buatAgen, arsipkanTranskrip } from "./src/core/agen.js";
 import { idSesiBaru, daftarSesi, simpanSesi, muatSesi, ringkasRiwayat } from "./src/core/sesi.js";
+import { nf, persen } from "./src/core/statistik.js";
 import { muatMemori, simpanMemori, BERKAS_MEMORI, KERANGKA_MEMORI } from "./src/core/memori.js";
 import { panel, pilihModel } from "./src/ui/tampilan.js";
 import { mulaiInput, tanyaTeks, tutupInput } from "./src/ui/input.js";
@@ -105,7 +106,7 @@ function bantuan() {
     `${C.ungu}${C.bold}  Model & Router${C.reset}`,
     `  ${C.emas}/model${C.reset} ${C.samar}[semua|nomor|id|cari <kata>]${C.reset}  ganti model AI`,
     `  ${C.emas}/router${C.reset} ${C.samar}[on|off]${C.reset}   pilih model otomatis per giliran`,
-    `  ${C.emas}/biaya${C.reset}            estimasi kuota token sesi ini`,
+    `  ${C.emas}/token${C.reset} ${C.samar}|${C.reset} ${C.emas}/biaya${C.reset}     pemakaian token nyata + % penghematan`,
     ``,
     `${C.ungu}${C.bold}  Sesi & Riwayat${C.reset}`,
     `  ${C.emas}/sesi${C.reset}             daftar sesi tersimpan`,
@@ -345,6 +346,52 @@ async function tanganiPerintah(input) {
       bubble("sukses", `Verbose: ${cfg.verbose ? "aktif" : "mati"}`);
       return true;
 
+    // ── /token : pemakaian NYATA (dari usage API) + penghematan pemadatan ──
+    case "token": {
+      // Kelas harga butuh multiplier model aktif (dari katalog). Kalau katalog
+      // gagal/di-cache kosong, kelas harga ditampilkan "?" — bukan ditebak.
+      let multAktif = null;
+      try {
+        const kat = await ambilKatalog(cfg);
+        multAktif = kat.find((x) => x.id === cfg.model)?.multiplier ?? null;
+      } catch { /* katalog gagal: biarkan ? */ }
+      const s = agen.ringkasToken?.(multAktif);
+      if (!s || !s.panggilan) {
+        bubble("info", "Belum ada panggilan model di sesi ini. Kirim satu pertanyaan dulu.");
+        return true;
+      }
+      const baris = [];
+      baris.push(`${C.gray}panggilan API${C.reset} ${s.panggilan} · ${s.detik} detik · ${s.giliranDiukur} pengiriman diukur`);
+      baris.push(`${C.gray}token MASUK${C.reset}  ${C.bold}${nf(s.masuk)}${C.reset} ${C.samar}(prompt — dikirim ke model)${C.reset}`);
+      if (s.cacheHemat) baris.push(`${C.gray}  dari cache${C.reset} ${nf(s.cacheHemat)} ${C.samar}(ditagih lebih murah)${C.reset}`);
+      baris.push(`${C.gray}token KELUAR${C.reset} ${C.bold}${nf(s.keluar)}${C.reset} ${C.samar}(jawaban)${C.reset}`);
+      if (s.reasoning) baris.push(`${C.gray}  penalaran${C.reset} ${nf(s.reasoning)} ${C.samar}(token berpikir — ditagih, tidak terlihat)${C.reset}`);
+      baris.push(`${C.emas}total token${C.reset}  ${C.bold}${nf(s.totalToken)}${C.reset}`);
+      baris.push(``);
+      // ── penghematan: ini yang menjawab "berapa persen hematnya" ──
+      baris.push(`${C.ungu}${C.bold}PENGHEMATAN PEMADATAN RIWAYAT${C.reset}`);
+      baris.push(`${C.gray}seharusnya dikirim${C.reset} ${nf(s.mentah / 4)} token ${C.samar}(${nf(s.mentah)} char)${C.reset}`);
+      baris.push(`${C.gray}benar-benar dikirim${C.reset} ${nf(s.kirim / 4)} token ${C.samar}(${nf(s.kirim)} char)${C.reset}`);
+      baris.push(`${C.aksen2}${C.bold}HEMAT ${persen(s.persenHemat)}${C.reset} ${C.samar}≈ ${nf(s.tokenDihemat)} token tidak pernah dikirim${C.reset}`);
+      baris.push(``);
+      // ── kuota terpotong per model ──
+      const mult = s.perModel.find((m) => m.id === cfg.model)?.mult;
+      baris.push(`${C.ungu}${C.bold}KUOTA TERPOTONG${C.reset} ${C.samar}(masuk + keluar) × multiplier, dibulatkan per panggilan${C.reset}`);
+      for (const m of s.perModel) {
+        const mm = Number(m.mult) || 1;
+        // PENTING (sinkron docs Re:Link): simbol "×" HANYA untuk multiplier —
+        // setiap "×" di sini diikuti kata "multiplier". Jumlah panggilan
+        // ditulis "n panggilan", jangan "nx" (bentrok dengan arti × di docs).
+        const kuotaModel = Number(m.kuota) || Math.round((m.masuk + m.keluar) * mm);
+        baris.push(`  ${C.cyan}${m.id}${C.reset} ${C.samar}${m.panggilan} panggilan · ${nf(m.masuk)} masuk / ${nf(m.keluar)} keluar · ${nf(m.masuk + m.keluar)} × multiplier ${mm}×${C.reset} → ${C.bold}${nf(kuotaModel)}${C.reset}`);
+      }
+      baris.push(`  ${C.emas}total${C.reset} ${C.bold}${nf(s.kuota)}${C.reset} token ${C.samar}· kelas harga ${s.kelasHarga}${C.reset}`);
+      if (s.tanpaUsage) baris.push(`${C.yellow}catatan${C.reset} ${s.tanpaUsage} panggilan tidak mengirim data usage — angkanya tidak lengkap.`);
+      baris.push(`${C.gray}catatan${C.reset} angka masuk/keluar berasal dari API (pasti). Penghematan diukur dari panjang riwayat nyata.`);
+      panel("PEMAKAIAN TOKEN", baris);
+      return true;
+    }
+
     case "biaya": {
       try {
         const katalog = await ambilKatalog(cfg);
@@ -357,7 +404,7 @@ async function tanganiPerintah(input) {
         const baris = [
           `${C.gray}model${C.reset} ${cfg.model}${m?.multiplier != null ? ` (multiplier ${m.multiplier}x)` : ""}`,
           `${C.gray}token (perkiraan)${C.reset} masuk ${masuk.toFixed(0)} · keluar ${keluar.toFixed(0)}`,
-          `${C.gray}kuota terpotong${C.reset} (masuk + keluar) × ${mult}x ≈ ${Math.round(kuota).toLocaleString("id-ID")} token`,
+          `${C.gray}kuota terpotong${C.reset} (masuk + keluar) × multiplier ${mult}× ≈ ${Math.round(kuota).toLocaleString("id-ID")} token`,
         ];
         // Penyedia lain (baseCadangan) mungkin memakai harga dolar per juta token.
         if (m && (m.harga.input > 0 || m.harga.output > 0)) {
