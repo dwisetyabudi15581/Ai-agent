@@ -63,7 +63,9 @@ export const GAYA = {
 /** Hapus seluruh kode ANSI bila warna dimatikan. */
 export function tanpaWarna(teks) {
   if (PAKAI_WARNA) return String(teks);
-  return String(teks).replace(/\x1b\[[0-9;]*m/g, "");
+  return String(teks)
+    .replace(/\x1b\[[0-9;]*m/g, "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, "");
 }
 
 // ---------- Waktu ----------
@@ -79,9 +81,14 @@ export function jamSekarang() {
 const ANSI = /\x1b\[[0-9;]*m/g;
 
 /** Lebar visual teks (ANSI diabaikan, emoji/wide char dihitung 2). */
+// Penanda gaya (lihat P di bawah) adalah karakter kontrol yang TIDAK pernah
+// dicetak — dibuang oleh terapkanGaya/tanpaWarna. Jadi ia tidak boleh ikut
+// dihitung sebagai lebar, kalau tidak bungkus() memotong baris terlalu cepat.
+const PENANDA_GAYA = /[\u0000-\u0008\u000e]/g;
+
 export function lebarTeks(s) {
   let total = 0;
-  for (const ch of String(s).replace(ANSI, "")) {
+  for (const ch of String(s).replace(ANSI, "").replace(PENANDA_GAYA, "")) {
     const cp = ch.codePointAt(0);
     if (cp >= 0x1f300 && cp <= 0x1faff) total += 2;
     else if (cp >= 0x1100 && cp <= 0x115f) total += 2;

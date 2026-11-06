@@ -80,7 +80,15 @@ export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
   // System prompt disusun ulang tiap giliran agar memori & waktu tetap segar
   async function siapkanMessages(mode) {
     const memori = await muatMemori();
-    const sys = { role: "system", content: sisipkanMemori(systemPrompt(cfg, mode), memori) };
+    // Daftar tool ikut dikirim ke systemPrompt supaya prompt hanya menyebut
+    // tool yang benar-benar terpasang (termasuk tool dinamis hasil bikin_tool).
+    const namaToolAktif = (Array.isArray(tools) ? tools : [])
+      .map((t) => t?.function?.name || t?.nama || t?.name)
+      .filter(Boolean);
+    const sys = {
+      role: "system",
+      content: sisipkanMemori(systemPrompt({ ...cfg, tools: namaToolAktif }, mode), memori),
+    };
     const riwayat = sesi.messages.filter((m) => m.role !== "system");
     sesi.messages = [sys, ...riwayat];
   }
@@ -312,11 +320,20 @@ export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
       dijalankan.forEach((call, i) => {
         const keluar = hasilParalel[i] || { raw: "Error: hasil tool kosong." };
         bubble("tool", keluar);
+        // CATATAN: `raw ?? detail` salah karena string kosong ("") bukan null.
+        // Akibatnya tool dengan raw="" mengirim content kosong ke model, model
+        // mengira tak ada hasil, lalu mengulang tool yang sama sampai batas.
+        const isiMentah = typeof keluar.raw === "string" ? keluar.raw.trim() : "";
+        const isiCadangan = [
+          keluar.detail,
+          keluar.judul,
+          keluar.ok === false ? "Error: tool gagal tanpa detail." : "",
+        ].find((s) => typeof s === "string" && s.trim());
         sesi.messages.push({
           role: "tool",
           tool_call_id: call.id,
           name: call.function?.name,
-          content: keluar.raw ?? keluar.detail ?? "",
+          content: isiMentah || isiCadangan || "(tool selesai tanpa keluaran teks)",
         });
       });
 
