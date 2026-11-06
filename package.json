@@ -1,6 +1,6 @@
 {
   "name": "agent-termux",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "Asisten AI pribadi + agen otonom untuk Termux (Re:Link Gateway, multi-model, memori, sesi, streaming)",
   "main": "index.js",
   "type": "module",

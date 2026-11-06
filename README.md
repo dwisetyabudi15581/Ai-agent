@@ -1,4 +1,4 @@
-# Agent Termux v3.3
+# Agent Termux v3.4
 
 Asisten AI pribadi + agen otonom untuk Termux, ditenagai gateway OpenAI-compatible (**42 model** dalam satu API key).
 

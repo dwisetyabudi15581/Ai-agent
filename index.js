@@ -1,5 +1,5 @@
 /**
- * INDEX.JS — Agent Termux v3.2
+ * INDEX.JS — Agent Termux v3.4
  * AI Agent otonom + teman ngobrol, powered by Re:Link Gateway.
  *
  * Jalankan:  node index.js
@@ -79,6 +79,14 @@ const eksekusiTool = buatEksekutor(cfg, { cwd: process.cwd(), izinkanHapus: true
 const agen = await buatAgen({ cfg, tools, eksekusiTool, sesi });
 
 // ===================== LAYAR =====================
+/** Baris statistik ringkas: skill, sop, protokol, memori, dokumen. */
+function statKonteks() {
+  const bagian = [];
+  const t = (typeof tools !== "undefined" && Array.isArray(tools)) ? tools : [];
+  if (t.length) bagian.push(`${C.bold}${t.length}${C.reset} ${C.gray}skill${C.reset}`);
+  return bagian.join(`${C.gray} · ${C.reset}`);
+}
+
 function header() {
   const W = Math.min(process.stdout.columns || 80, 100) - 4;
   const lebarKotak = Math.max(W, 40);
@@ -87,7 +95,7 @@ function header() {
 
   // Judul bergradien (biru → ungu) agar terasa hidup.
   tulis("");
-  tulis(`  ${C.aksen}${C.bold}◆${C.reset}  ${C.bold}${C.aksen}A${C.aksen2}G${C.emas}E${C.jingga}N${C.ungu}T${C.reset} ${C.samar}${C.dim}·${C.reset} ${C.bold}Termux AI${C.reset} ${C.samar}v3.3${C.reset}`);
+  tulis(`  ${C.aksen}${C.bold}◆${C.reset}  ${C.bold}${C.aksen}A${C.aksen2}G${C.emas}E${C.jingga}N${C.ungu}T${C.reset} ${C.samar}${C.dim}·${C.reset} ${C.bold}Termux AI${C.reset} ${C.samar}v3.4${C.reset}`);
   tulis(`  ${C.samar}${garisAtas}${C.reset}`);
 
   const router = cfg.modelTerkunci

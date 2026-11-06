@@ -55,6 +55,25 @@ export const C = {
 };
 
 /** Nama gaya → kode ANSI, untuk pemakaian seragam. */
+// ============ ALAT TATA LETAK (dipakai header, panel, dan /tema) ============
+// Lebar kotak menyesuaikan kolom terminal dengan batas aman.
+export function lebarKotak(maks = 96, min = 40) {
+  const kolom = process.stdout.columns || 80;
+  return Math.max(min, Math.min(kolom - 4, maks));
+}
+
+// Baris judul bergradien: satu kata, tiap huruf beda warna.
+export function judulGradien(kata, daftarWarna = [C.aksen, C.aksen2, C.emas, C.jingga, C.ungu]) {
+  return [...kata]
+    .map((h, i) => `${daftarWarna[i % daftarWarna.length]}${h}`)
+    .join("") + C.reset;
+}
+
+// Versi ringkas: kode warna ANSI dari objek C (dipakai untuk /tema & diagnostik).
+export function kodeWarna(nama) {
+  return C[nama] || "";
+}
+
 export const GAYA = {
   agent: C.aksen, user: C.aksen2, tool: C.jingga, info: C.aksen,
   sukses: C.aksen2, error: C.merah, emas: C.emas,
@@ -260,12 +279,25 @@ export function bubble(peran, isi) {
   const kepala = `${jamSekarang()} ${warna}${C.bold}${p.ikon} ${p.nama}${C.reset}${judulTool}`;
   cetak("\n" + kepala);
 
+  // Tool: header (judul + ✓/✗) sudah cukup. Detail hanya dicetak bila gagal,
+  // supaya chat tidak penuh potongan output mentah tiap tugas.
+  if (peran === "tool") {
+    if (isi && typeof isi === "object" && isi.ok === false) {
+      const pesan = String(isi.detail ?? isi.raw ?? "").split("\n").slice(0, 4).join("\n");
+      if (pesan.trim()) {
+        const aksenErr = `${C.merah}▏${C.reset}`;
+        bungkus(pesan, W - 3).forEach((b) => cetak(`${aksenErr} ${C.samar}${b}${C.reset}`));
+      }
+    }
+    return;
+  }
+
   const teks = peran === "agent" ? markdown(isi) : String(isi?.detail ?? isi);
   const baris = bungkus(teks, W - 3);
   const aksen = `${warna}▏${C.reset}`;
 
   baris.forEach((b) => {
-    const isi2 = peran === "agent" ? terapkanGaya(b) : peran === "tool" ? `${C.samar}${b}${C.reset}` : b;
+    const isi2 = peran === "agent" ? terapkanGaya(b) : b;
     cetak(`${aksen} ${isi2}`);
   });
 }
