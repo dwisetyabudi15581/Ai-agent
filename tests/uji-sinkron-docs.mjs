@@ -11,7 +11,7 @@ import fs from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { buatPencatatToken } from "../src/core/statistik.js";
-import { PRESET_RELINK } from "../src/api/preset-model.js";
+import { PRESET_MODEL } from "../src/api/preset-model.js";
 
 const akar = join(dirname(fileURLToPath(import.meta.url)), "..");
 const idx = fs.readFileSync(join(akar, "index.js"), "utf8");
@@ -70,13 +70,13 @@ console.log("--- SINKRON DOKUMENTASI RE:LINK ---");
 
 // 6. Preset memakai istilah & tipe yang sama: multiplier angka, 1 = termurah.
 {
-  const semuaAngka = PRESET_RELINK.every((m) => typeof m.multiplier === "number" && m.multiplier > 0);
-  const adaSatu = PRESET_RELINK.some((m) => m.multiplier === 1);
+  const semuaAngka = PRESET_MODEL.every((m) => typeof m.multiplier === "number" && m.multiplier > 0);
+  const adaSatu = PRESET_MODEL.some((m) => m.multiplier === 1);
   cek("preset: multiplier selalu angka > 0", semuaAngka);
   cek("preset: ada model multiplier 1 (default 1:1 docs)", adaSatu);
-  cek("preset: id 'auto' = Multiplier 1× (sesuai kartu docs)", PRESET_RELINK.find((m) => m.id === "auto")?.multiplier === 1);
-  cek("preset: glm-5.3-flash mult 2 (sesuai kartu docs)", PRESET_RELINK.find((m) => m.id === "glm-5.3-flash")?.multiplier === 2);
-  cek("preset: claude-opus-5 mult 20 (sesuai kartu docs)", PRESET_RELINK.find((m) => m.id === "claude-opus-5")?.multiplier === 20);
+  cek("preset: id 'auto' = Multiplier 1× (sesuai kartu docs)", PRESET_MODEL.find((m) => m.id === "auto")?.multiplier === 1);
+  cek("preset: glm-5.3-flash mult 2 (sesuai kartu docs)", PRESET_MODEL.find((m) => m.id === "glm-5.3-flash")?.multiplier === 2);
+  cek("preset: claude-opus-5 mult 20 (sesuai kartu docs)", PRESET_MODEL.find((m) => m.id === "claude-opus-5")?.multiplier === 20);
 }
 
 // 7. Komentar sumber menyebut rujukan dokumentasi (jejak agar tidak hilang).

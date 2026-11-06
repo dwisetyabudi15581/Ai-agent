@@ -64,7 +64,7 @@ cek("field setelan di arsip sesi bersih dari penyedia lama", sesiKotor.length ==
 console.log("\n=== 2. PEMBERSIHAN CONFIG DI DISK ===");
 const { muatConfig, DEFAULT_CONFIG, BASE_UTAMA, BERKAS_CONFIG } = await import("../src/config/config.js");
 
-cek("baseUrl bawaan mengarah ke Re:Link", DEFAULT_CONFIG.baseUrl === BASE_UTAMA, DEFAULT_CONFIG.baseUrl);
+cek("baseUrl bawaan kosong (wajib dari env/config)", DEFAULT_CONFIG.baseUrl === "", JSON.stringify(DEFAULT_CONFIG.baseUrl));
 cek("apiKey tidak ikut tersimpan ke disk (FIELD_DISIMPAN)", true); // diuji nyata di bagian 3
 
 const lama = await fs.readFile(BERKAS_CONFIG, "utf-8").catch(() => null);
@@ -80,7 +80,24 @@ try {
 
   const cfg = await muatConfig();
   cek("apiKey dari disk diabaikan", cfg.apiKey !== "sk-MATI-jangan-dipakai-000", String(cfg.apiKey).slice(0, 12));
-  cek("baseUrl dari .env menang atas disk", cfg.baseUrl === BASE_UTAMA, cfg.baseUrl);
+  // muatConfig() mem-parse ./.env ke process.env; baca ulang nilainya sekarang.
+  // BASE_URL bisa datang dari process.env ATAU dari ./.env (diparse muatConfig).
+  // Skrip ini chdir ke folder kerja, jadi ./.env ikut terbaca.
+  let envBase = String(process.env.BASE_URL || process.env.RELINK_BASE_URL || "").trim();
+  if (!envBase) {
+    try {
+      const isiEnv = await fs.readFile(path.join(process.cwd(), ".env"), "utf-8");
+      const m = isiEnv.match(/^\s*(?:BASE_URL|RELINK_BASE_URL)\s*=\s*(.+?)\s*$/m);
+      if (m) envBase = m[1].replace(/^["']|["']$/g, "").trim();
+    } catch { /* .env tidak ada — biarkan kosong */ }
+  }
+  // URL di .env terbukti benar-benar dipakai gateway (permintaan nyata lolos),
+  // jadi host itu bukan "host lama" — cukup pastikan nilai disk tidak menang.
+  const hostEnv = (() => { try { return new URL(envBase).host; } catch { return ""; } })();
+  const hostCfg = (() => { try { return new URL(cfg.baseUrl).host; } catch { return ""; } })();
+  cek("baseUrl dari env/.env menang atas disk (bukan host lama)",
+      cfg.baseUrl !== "https://api.penyedia-lama.example/v1" && (envBase ? hostCfg === hostEnv : cfg.baseUrl === ""),
+      cfg.baseUrl || "(kosong)");
   cek("field asing tidak ikut termuat", !("fieldAsingTidakDikenal" in cfg));
 
   const disk = JSON.parse(await fs.readFile(BERKAS_CONFIG, "utf-8"));

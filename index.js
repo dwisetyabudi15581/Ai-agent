@@ -9,7 +9,7 @@
  *   --router          paksa router model otomatis aktif (timpa kunci lama)
  *   --no-stream       non-streaming
  *   --verbose         tampilkan usage & reasoning
- *   --putaran <n>     batas putaran tool per giliran (0 = TANPA BATAS, default)
+ *   --putaran <n>     batas putaran tool per giliran (default 0 = TANPA BATAS)
  *   --makstool <n>    batas total eksekusi tool per giliran (0 = TANPA BATAS, default)
  *   --max <n>         batas jumlah giliran user (otomatis/robot)
  *
@@ -51,7 +51,7 @@ if (nilai("model")) {
 if (flag("router")) cfg.modelTerkunci = false; // paksa kembali otomatis
 if (flag("no-stream")) cfg.streamDefault = false;
 if (flag("verbose")) cfg.verbose = true;
-// --putaran <n> / --makstool <n> : 0 = tanpa batas (default).
+// --putaran <n> / --makstool <n> : 0 = tanpa batas; putaran default 0 (tanpa batas).
 if (nilai("putaran") !== undefined) {
   const n = Number(nilai("putaran"));
   if (Number.isFinite(n) && n >= 0) cfg.maksPutaran = n === 0 ? 0 : Math.min(n, 10000);
@@ -65,7 +65,7 @@ const batasGiliran = Number(nilai("max")) || Infinity;
 
 if (!cfg.apiKey) {
   tulis(`${C.red}API key Re:Link belum ada.${C.reset}`);
-  tulis(`${C.gray}Set: export RELINK_API_KEY=sk-...  atau isi ~/.agent-termux/config.json${C.reset}`);
+  tulis(`${C.gray}Set: export API_KEY=sk-...  atau isi ~/.agent-termux/config.json${C.reset}`);
   process.exit(1);
 }
 

@@ -1,16 +1,18 @@
 # Agent Termux v3.3
 
-Asisten AI pribadi + agen otonom untuk Termux, ditenagai [Re:Link Gateway](https://relink-gateway.biz.id) (OpenAI-compatible, **42 model** dalam satu API key).
+Asisten AI pribadi + agen otonom untuk Termux, ditenagai gateway OpenAI-compatible (**42 model** dalam satu API key).
 
 ## Pasang
 ```bash
-export RELINK_API_KEY=sk-xxxx      # atau isi ~/.agent-termux/config.json
+export API_KEY=sk-xxxx           # atau isi ~/.agent-termux/config.json
 node index.js
 ```
 
-Satu penyedia saja: Re:Link Gateway (https://relink-gateway.biz.id).
-Base URL, model, dan kredensial diatur lewat `.env` — `config.json` murni
-setelan lokal tanpa kredensial.
+Gateway tunggal, tanpa provider lain. **Base URL tidak ditulis di kode** —
+wajib diisi lewat `.env` (`BASE_URL`) atau `config.json` (`baseUrl`).
+Bila keduanya kosong, client melapor galat "Base URL belum diatur" alih-alih
+menembak host default. `config.json` murni setelan lokal tanpa kredensial;
+kunci API hanya dibaca dari env / `.env`.
 
 ## Struktur proyek
 ```

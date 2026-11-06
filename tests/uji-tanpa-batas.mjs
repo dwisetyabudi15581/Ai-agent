@@ -29,11 +29,16 @@ const gagal = (s) => catat.push(["GAGAL", s]);
     }).trim().split("\n").pop());
   };
 
-  // DEFAULT_CONFIG harus 0 (tanpa batas) — dokumentasi perilaku bawaan.
-  if (DEFAULT_CONFIG.maksPutaran === 0 && DEFAULT_CONFIG.maksTool === 0) {
-    ok("DEFAULT_CONFIG.maksPutaran & maksTool = 0 (bawaan tanpa batas)");
+  // Default bawaan: putaran 50 (rem), maksTool 0 (tanpa batas).
+  if (DEFAULT_CONFIG.maksPutaran === 0) {
+    ok("DEFAULT_CONFIG.maksPutaran = 0 (tanpa rem bawaan)");
   } else {
-    gagal(`DEFAULT_CONFIG tidak 0 → p=${DEFAULT_CONFIG.maksPutaran} t=${DEFAULT_CONFIG.maksTool}`);
+    gagal(`DEFAULT_CONFIG.maksPutaran tidak 0 → ${DEFAULT_CONFIG.maksPutaran}`);
+  }
+  if (DEFAULT_CONFIG.maksTool === 0) {
+    ok("DEFAULT_CONFIG.maksTool = 0 (tanpa batas total tool)");
+  } else {
+    gagal(`DEFAULT_CONFIG.maksTool tidak 0 → ${DEFAULT_CONFIG.maksTool}`);
   }
   void cfg; void jalankan;
 }
@@ -149,6 +154,35 @@ const eksekusiTool = async () => ({ judul: "cek_folder", detail: ".", raw: "ok",
   else gagal(`rem maksTool bocor → panggilan=${jumlahPanggilan}`);
 
   if (hasil?.mentok === true) ok("mentok=true saat rem maksTool menahan");
+  else gagal(`harusnya mentok=true → ${JSON.stringify(hasil)}`);
+}
+
+// ── 5. Rem EKSPLISIT: bila user memasang angka sendiri (12), loop bandel
+//        harus berhenti di 12 — membuktikan rem masih berfungsi, meski
+//        bawaan sekarang 0 (tanpa batas).
+{
+  modeServer = "bandel"; jumlahPanggilan = 0;
+  const cfg = await muatConfig();
+  cfg.baseUrl = `http://127.0.0.1:${port}/v1`;
+  cfg.baseCadangan = "";
+  cfg.apiKey = "uji";
+  cfg.streamDefault = false;
+  cfg.routingOtomatis = false;
+  cfg.verbose = false;
+  cfg.autoCompact = false;
+  // Pasang rem sendiri; bawaan DEFAULT_CONFIG sengaja 0 (tanpa batas).
+  cfg.maksPutaran = 12;
+  cfg.maksTool = DEFAULT_CONFIG.maksTool;
+  const sesi = { id: "rem-eksplisit-12", messages: [{ role: "user", content: "kerjakan" }] };
+  const hasil = await buatAgen({ cfg, tools, eksekusiTool, sesi }).then((a) => a.giliran("auto", "kerjakan"));
+
+  if (DEFAULT_CONFIG.maksPutaran === 0) ok(`DEFAULTS maksPutaran=0 / tanpa batas (terbaca ${DEFAULT_CONFIG.maksPutaran})`);
+  else gagal(`DEFAULTS maksPutaran=${DEFAULT_CONFIG.maksPutaran}, harusnya 0 (tanpa batas)`);
+
+  if (jumlahPanggilan === 12) ok(`loop berhenti tepat di rem eksplisit 12 → panggilan=${jumlahPanggilan}`);
+  else gagal(`panggilan=${jumlahPanggilan}, harusnya 12 (berhenti di rem eksplisit)`);
+
+  if (hasil?.mentok === true) ok("mentok=true → agent melapor kehabisan putaran");
   else gagal(`harusnya mentok=true → ${JSON.stringify(hasil)}`);
 }
 

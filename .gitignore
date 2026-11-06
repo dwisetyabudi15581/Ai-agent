@@ -12,3 +12,7 @@ tmp-uji/
 *.bak
 uji-edit.txt
 .agen-uji*.mjs
+
+# Arsip backup lokal (berisi salinan .env — JANGAN commit)
+.arsip-branding/
+*.bak

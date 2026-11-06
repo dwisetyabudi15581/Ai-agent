@@ -25,7 +25,13 @@ export async function panggilChat(cfg, messages, tools, opsi = {}) {
     toolChoice = "auto",
   } = opsi;
 
-  const tenggat = Date.now() + detikTotal * 1000;
+  // Anggaran total yang tidak wajar (0, negatif, NaN) tidak boleh mematikan
+  // seluruh rantai sebelum satu pun percobaan jalan. Pakai batas aman minimum.
+  const totalDetikAman = Number.isFinite(detikTotal) && detikTotal > 0
+    ? detikTotal
+    : Math.max(1, Number(detikTimeout) || 600);
+
+  const tenggat = Date.now() + totalDetikAman * 1000;
   const sisaMs = () => tenggat - Date.now();
 
   const daftarModel = [model];
@@ -129,7 +135,19 @@ export async function panggilChat(cfg, messages, tools, opsi = {}) {
     }
   }
 
-  throw galatTerakhir || new Error("Gagal memanggil API Re:Link");
+  // Tidak ada galat tercatat = tidak satupun percobaan sempat dijalankan.
+  // Pesan menyebut HOST yang benar-benar dituju (bukan nama produk hardcoded),
+  // supaya log jujur soal endpoint mana yang dipanggil.
+  const urlDicoba = [...new Set([...urlStreamLengkap, ...urlNonStream])]
+    .map((u) => { try { return new URL(u).host; } catch { return null; } })
+    .filter(Boolean);
+  const daftarHost = urlDicoba.length ? urlDicoba.join(", ") : "(base URL kosong / tidak dikonfigurasi)";
+
+  throw galatTerakhir || new Error(
+    `Tidak ada endpoint yang sempat dipanggil: ${daftarHost} — ` +
+    `anggaran waktu habis sebelum percobaan pertama ` +
+    `(detikTotal=${detikTotal}, detikTimeout=${detikTimeout}, totalDetikAman=${totalDetikAman})`
+  );
   // Catatan: `detikTimeout` = batas per percobaan, `detikTotal` = anggaran
   // seluruh rantai fallback (stream → non-stream → model cadangan).
 }

@@ -11,7 +11,7 @@ import fs from "fs/promises";
 import path from "path";
 import { daftarUrl } from "../config/config.js";
 import { DIR_DATA } from "../paths.js";
-import { PRESET_RELINK, TANGGAL_PRESET, cariPreset } from "./preset-model.js";
+import { PRESET_MODEL, TANGGAL_PRESET, cariPreset } from "./preset-model.js";
 
 const BERKAS_CACHE_KATALOG = path.join(DIR_DATA, "cache-model.json");
 const UMUR_CACHE = 60 * 60 * 1000; // 1 jam
@@ -38,8 +38,8 @@ function normalisasi(m, preset = false) {
   return {
     id: m.id,
     nama: m.name || p?.nama || m.id,
-    pemilik: m.owned_by || p?.vendor || "relink",
-    vendor: p?.vendor || m.owned_by || "relink",
+    pemilik: m.owned_by || p?.vendor || "tidak diketahui",
+    vendor: p?.vendor || m.owned_by || "tidak diketahui",
     konteks: m.context_length || m.max_context || 0, // 0 = tidak dipublikasikan
     outputMaks: m.max_output_tokens || m.max_tokens || 0,
     // null = gateway tidak mendeklarasikan kapabilitas
@@ -61,7 +61,7 @@ export function kapabilitasTampil(m) {
 
 /** Preset sebagai katalog bentuk-baku (fallback offline). */
 function katalogPreset() {
-  return PRESET_RELINK.map((p) => normalisasi({
+  return PRESET_MODEL.map((p) => normalisasi({
     id: p.id, vision: p.vision, enabled: p.aktif, available: p.aktif,
   }, true));
 }
@@ -157,5 +157,5 @@ export async function ambilKatalog(cfg, opsi = {}) {
 
 /** Info snapshot preset untuk ditampilkan di UI. */
 export function infoPreset() {
-  return { tanggal: TANGGAL_PRESET, jumlah: PRESET_RELINK.length };
+  return { tanggal: TANGGAL_PRESET, jumlah: PRESET_MODEL.length };
 }

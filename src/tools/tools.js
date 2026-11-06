@@ -12,6 +12,7 @@ import {
   muatToolDinamis, keSkema, simpanTool, hapusTool,
   daftarToolDinamis, galatTool, DIR_TOOL, namaSah, setNamaBawaan,
 } from "./registry.js";
+import { ambilKuota, ringkasKuota, formatToken } from "../core/kuota.js";
 
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
@@ -97,6 +98,7 @@ function toolBawaan() {
     { type: "function", function: { name: "cek_folder", description: "Melihat daftar isi direktori beserta ukurannya.", parameters: { type: "object", properties: { path_direktori: { type: "string", description: "contoh: ./" } }, required: ["path_direktori"] } } },
     { type: "function", function: { name: "cari_teks", description: "Mencari teks/pola di dalam file-file proyek (grep rekursif).", parameters: { type: "object", properties: { pola: { type: "string" }, folder: { type: "string", description: "default ./" } }, required: ["pola"] } } },
     { type: "function", function: { name: "daftar_model", description: "Mengambil daftar semua model AI Re:Link yang didukung (aktif + nonaktif) beserta multiplier token, vendor, dan kapabilitasnya.", parameters: { type: "object", properties: {} } } },
+    { type: "function", function: { name: "cek_kuota", description: "Mengecek sisa kuota token akun gateway Re:Link (status akun, token terpakai/sisa, jumlah permintaan, masa berlaku).", parameters: { type: "object", properties: {} } } },
     { type: "function", function: { name: "ingat", description: "Menyimpan fakta penting ke memori jangka panjang (bertahan antar sesi).", parameters: { type: "object", properties: { fakta: { type: "string", description: "fakta ringkas yang harus diingat" }, bagian: { type: "string", enum: ["Tentang User", "Proyek & Lingkungan", "Fakta Penting", "Catatan Terakhir"] } }, required: ["fakta"] } } },
     { type: "function", function: { name: "baca_memori", description: "Membaca seluruh memori jangka panjang.", parameters: { type: "object", properties: {} } } },
     { type: "function", function: { name: "cari_web", description: "Mencari informasi terbaru di internet (DuckDuckGo) dan mengembalikan ringkasan hasil.", parameters: { type: "object", properties: { kueri: { type: "string" } }, required: ["kueri"] } } },
@@ -915,6 +917,33 @@ export function buatEksekutor(cfg, opsi = {}) {
           return {
             judul: `Katalog model (${jumlahAktif} aktif dari ${katalog.length})`,
             detail: baris.slice(0, 12).join("\n") + (baris.length > 12 ? `\n… +${baris.length - 12} model lain` : ""),
+            raw: baris.join("\n"),
+            ok: true,
+          };
+        }
+
+        case "cek_kuota": {
+          const hasil = await ambilKuota(cfg);
+          if (!hasil.ok) {
+            return { judul: "Kuota gagal diambil", detail: hasil.galat, raw: `Error ${hasil.status || ""}: ${hasil.galat}`.trim(), ok: false };
+          }
+          const k = ringkasKuota(hasil.data);
+          const baris = [];
+          if (k) {
+            if (k.nama) baris.push(`Akun      : ${k.nama} (${k.status ?? "-"})`);
+            if (k.maks != null) baris.push(`Batas     : ${formatToken(k.maks)} token`);
+            if (k.sisa != null) baris.push(`Sisa      : ${formatToken(k.sisa)} token`);
+            if (k.pakai != null) baris.push(`Terpakai  : ${formatToken(k.pakai)} token${k.persen != null ? ` (${k.persen}%)` : ""}`);
+            if (k.tokenTotal != null) baris.push(`Hitungan  : total ${formatToken(k.tokenTotal)} | prompt ${formatToken(k.tokenPrompt)} | completion ${formatToken(k.tokenCompletion)} | cache ${formatToken(k.tokenCache)}`);
+            if (k.permintaan != null) baris.push(`Permintaan: ${k.permintaan}`);
+            if (k.kedaluwarsa) baris.push(`Berlaku s/d: ${k.kedaluwarsa}`);
+            if (k.penalti) baris.push(`PENALTI aktif${k.penaltiSampai ? ` s/d ${k.penaltiSampai}` : ""}${k.alasanPenalti ? ` — ${k.alasanPenalti}` : ""}`);
+            if (k.dilarang) baris.push(`DIBLOKIR: ${k.dilarang}`);
+          }
+          if (!baris.length) baris.push(JSON.stringify(hasil.data).slice(0, 1200));
+          return {
+            judul: k && k.sisa != null ? `Kuota: sisa ${formatToken(k.sisa)} token` : "Kuota akun",
+            detail: baris.slice(0, 6).join("\n"),
             raw: baris.join("\n"),
             ok: true,
           };

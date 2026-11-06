@@ -5,14 +5,16 @@ import { DIR_DATA, pastikanDir } from "../paths.js";
 
 export const BERKAS_CONFIG = path.join(DIR_DATA, "config.json");
 
-// Base URL resmi Re:Link Gateway (OpenAI-compatible)
-export const BASE_UTAMA = "https://api.relink-gateway.biz.id/v1";
+// Base URL default gateway (OpenAI-compatible).
+// Sengaja KOSONG: tidak ada host yang dibakar di kode. Nilai wajib datang
+// dari .env (BASE_URL) atau config.json (baseUrl).
+export const BASE_UTAMA = "";
 
 export const DEFAULT_CONFIG = {
   apiKey: "",
   baseUrl: BASE_UTAMA,
-  // Re:Link hanya punya satu host; baseCadangan boleh diisi manual untuk
-  // penyedia lain dan dipakai failover otomatis (lihat daftarUrl).
+  // baseCadangan dipakai untuk failover otomatis bila host utama gagal
+  // (lihat daftarUrl).
   baseCadangan: "",
   model: "deepseek-v4-pro",
   modelCepat: "deepseek-v4.1-flash",
@@ -50,9 +52,10 @@ export const DEFAULT_CONFIG = {
   // berjalan tetap utuh (model masih butuh isi hasil terakhir untuk
   // memutuskan langkah berikutnya).
   jagaTerakhir: 4,
-  // Batas per giliran. 0 = TANPA BATAS (agent berhenti saat tugas selesai,
-  // atau saat terdeteksi mentok). Bukan angka mati: bisa diubah lewat
-  // config.json, /putaran <n>, atau CLI --putaran <n>.
+  // Batas per giliran. Default 0 = TANPA BATAS: agent baru berhenti saat
+  // tugasnya selesai atau saat ia menyatakan selesai — tidak dipotong jumlah
+  // putaran. Isi angka > 0 bila ingin memasang rem sendiri lewat config.json,
+  // /putaran <n>, atau CLI --putaran <n>.
   maksPutaran: 0,
   maksTool: 0,
   verbose: false,
@@ -64,11 +67,17 @@ export const DEFAULT_CONFIG = {
   modelTerkunci: false,
 };
 
-// Field yang boleh disimpan ke config.json (apiKey dikecualikan: sumbernya .env)
-const FIELD_DISIMPAN = Object.keys(DEFAULT_CONFIG).filter((k) => k !== "apiKey");
+// Field yang boleh disimpan ke config.json.
+// apiKey DAN baseUrl dikecualikan: keduanya kredensial/endpoint yang sumber
+// tunggalnya .env (API_KEY, BASE_URL). Tanpa pengecualian ini,
+// presedensi .env atas config.json jadi tidak konsisten — BASE_URL
+// diabaikan saat simpanConfig() menuliskan URL lama dari memori ke disk.
+const FIELD_DISIMPAN = Object.keys(DEFAULT_CONFIG).filter(
+  (k) => k !== "apiKey" && k !== "baseUrl",
+);
 
 // Kredensial TIDAK PERNAH ditulis ke config.json — sumber tunggal adalah .env
-// (RELINK_API_KEY). simpanConfig() memakai FIELD_DISIMPAN yang sudah membuang
+// (API_KEY). simpanConfig() memakai FIELD_DISIMPAN yang sudah membuang
 // apiKey, jadi kunci tidak pernah menetap di disk.
 
 // ---------- Penanda host bermasalah ----------
@@ -141,18 +150,81 @@ export async function muatConfig() {
     ...(await bacaEnvFile(path.join(process.cwd(), ".env"))),
   };
 
-  // Prioritas naik: default → config.json → .env → process.env.
-  // (Bug lama: hanya RELINK_API_KEY yang dibaca dari process.env —
-  // RELINK_BASE_URL/MODEL* diabaikan bila di-export langsung.)
-  const ambilEnv = (nama) => process.env[nama] || envFile[nama] || "";
+  // Prioritas naik: default → .env/process.env → config.json.
+  // .env adalah SUMBER NILAI AWAL (baseline), config.json adalah OVERRIDE
+  // RUNTIME. Urutan ini penting: perintah seperti `/model`, `/suhu`, `/router`
+  // menulis ke config.json, jadi config.json HARUS menang atas .env — kalau
+  // tidak, setiap perubahan runtime diam-diam tidak berefek.
+  // process.env menang atas isi .env (agar `MODEL=x npm start` bekerja).
+  //
+  // Kompatibilitas nama variabel:
+  //   - Nama generik (BASE_URL, API_KEY, MODEL, ...) adalah nama RESMI yang
+  //     didokumentasikan di .env.example dan dipakai semua instalasi baru.
+  //   - Nama lama berawalan RELINK_ tetap diterima sebagai alias agar setup
+  //     lama tidak rusak saat upgrade. Nama generik selalu menang.
+  //     Alias ini bisa dihapus pada rilis mayor berikutnya.
+  const awalanLama = "RELINK_";
+  const bacaMentah = (nama) => process.env[nama] || envFile[nama] || "";
+  const ambilEnv = (nama) => {
+    const utama = bacaMentah(nama);
+    if (utama !== "") return utama;
+    // fallback ke alias lama: BASE_URL -> RELINK_BASE_URL
+    return bacaMentah(awalanLama + nama);
+  };
+  const envNum = (nama) => {
+    const v = ambilEnv(nama);
+    if (v === "") return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  // Bool dari env hanya dianggap ada bila ditulis eksplisit, supaya nilai
+  // default/`false` di config.json tidak tertimpa diam-diam.
+  const envBool = (nama) => {
+    const v = ambilEnv(nama).toLowerCase();
+    if (["1", "true", "ya", "on"].includes(v)) return true;
+    if (["0", "false", "tidak", "off"].includes(v)) return false;
+    return undefined;
+  };
+  const envAngkaBebas = (nama) => {
+    const v = ambilEnv(nama);
+    if (v === "") return undefined;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
   const cfg = {
     ...DEFAULT_CONFIG,
-    ...dariFile,
-    ...(ambilEnv("RELINK_BASE_URL") ? { baseUrl: ambilEnv("RELINK_BASE_URL") } : {}),
-    ...(ambilEnv("RELINK_MODEL") ? { model: ambilEnv("RELINK_MODEL") } : {}),
-    ...(ambilEnv("RELINK_MODEL_CEPAT") ? { modelCepat: ambilEnv("RELINK_MODEL_CEPAT") } : {}),
-    ...(ambilEnv("RELINK_MODEL_CADANGAN") ? { modelCadangan: ambilEnv("RELINK_MODEL_CADANGAN") } : {}),
-    apiKey: ambilEnv("RELINK_API_KEY") || dariFile.apiKey || "",
+    // baseUrl: .env menang; config.json hanya dipakai bila .env tidak mengisinya
+    // (jalur pengisian manual lama). Keduanya tidak pernah ditulis ulang.
+    ...(ambilEnv("BASE_URL")
+      ? { baseUrl: ambilEnv("BASE_URL") }
+      : dariFile.baseUrl
+        ? { baseUrl: dariFile.baseUrl }
+        : { baseUrl: "" }),
+    ...(ambilEnv("MODEL") ? { model: ambilEnv("MODEL") } : {}),
+    ...(ambilEnv("MODEL_CEPAT") ? { modelCepat: ambilEnv("MODEL_CEPAT") } : {}),
+    ...(ambilEnv("MODEL_CADANGAN") ? { modelCadangan: ambilEnv("MODEL_CADANGAN") } : {}),
+    ...(ambilEnv("BASE_CADANGAN") ? { baseCadangan: ambilEnv("BASE_CADANGAN") } : {}),
+    ...(ambilEnv("NAMA_AGENT") ? { namaAgent: ambilEnv("NAMA_AGENT") } : {}),
+    ...(envNum("MAX_TOKENS") !== undefined ? { maxTokens: envNum("MAX_TOKENS") } : {}),
+    ...(envNum("SUHU") !== undefined ? { suhu: envNum("SUHU") } : {}),
+    ...(envAngkaBebas("MAKS_PUTARAN") !== undefined ? { maksPutaran: envAngkaBebas("MAKS_PUTARAN") } : {}),
+    ...(envAngkaBebas("MAKS_TOOL") !== undefined ? { maksTool: envAngkaBebas("MAKS_TOOL") } : {}),
+    ...(envBool("VERBOSE") !== undefined ? { verbose: envBool("VERBOSE") } : {}),
+    ...(envBool("ROUTING_OTOMATIS") !== undefined ? { routingOtomatis: envBool("ROUTING_OTOMATIS") } : {}),
+    ...(envBool("MODEL_TERKUNCI") !== undefined ? { modelTerkunci: envBool("MODEL_TERKUNCI") } : {}),
+    ...(envBool("STREAM") !== undefined ? { streamDefault: envBool("STREAM") } : {}),
+    ...(envBool("AUTO_COMPACT") !== undefined ? { autoCompact: envBool("AUTO_COMPACT") } : {}),
+    // config.json menang atas env: override runtime tidak boleh hilang.
+    // Kecuali baseUrl/apiKey: keduanya BUKAN field tersimpan (FIELD_DISIMPAN
+    // mengecualikannya), jadi bila ada nilainya di config.json itu sisa basi
+    // dari versi lama dan tidak boleh mengalahkan .env.
+    ...(() => {
+      const bersih = { ...dariFile };
+      delete bersih.baseUrl;
+      delete bersih.apiKey;
+      return bersih;
+    })(),
+    apiKey: ambilEnv("API_KEY") || dariFile.apiKey || "",
   };
 
   // normalisasi nilai numerik
@@ -203,18 +275,20 @@ export async function simpanConfig(cfg) {
  * Bila baseCadangan kosong / sama dengan baseUrl, cukup satu host.
  */
 export function daftarUrl(cfg, { stream = true } = {}) {
-  const utama = (cfg.baseUrl || BASE_UTAMA).replace(/\/+$/, "");
+  const utama = (cfg.baseUrl || "").trim().replace(/\/+$/, "");
   const cadangan = (cfg.baseCadangan || "").replace(/\/+$/, "");
   const urut = cadangan && cadangan !== utama
     ? (stream ? [utama, cadangan] : [cadangan, utama])
     : [utama];
   const sekarang = Date.now();
-  const hidup = urut.filter((u) => {
+  const terisi = urut.filter((u) => u.length > 0);
+  if (!terisi.length) return [];
+  const hidup = terisi.filter((u) => {
     const t = hostBermasalah.get(u);
     return !t || sekarang - t > MASA_ISTIRAHAT;
   });
   // bila semua sedang "istirahat", tetap coba semua (jangan mati total)
-  return [...new Set(hidup.length ? hidup : urut)].map((b) => `${b}/chat/completions`);
+  return [...new Set(hidup.length ? hidup : terisi)].map((b) => `${b}/chat/completions`);
 }
 
 export function tandaiBermasalah(urlDasar) {

@@ -1,10 +1,10 @@
-// ============ PRESET KATALOG MODEL RE:LINK GATEWAY ============
-// Snapshot katalog resmi https://relink-gateway.biz.id per 2026-11-05.
+// ============ PRESET KATALOG MODEL GATEWAY ============
+// Snapshot katalog gateway per 2026-11-05.
 //
 // Kegunaan:
 //  1. Sumber multiplier, nama tampilan, dan vendor — endpoint /v1/models
 //     TIDAK menyediakan ketiganya, sedangkan router butuh multiplier
-//     sebagai metrik biaya (Re:Link memakai token prabayar x multiplier,
+//     sebagai metrik biaya (gateway memakai token prabayar x multiplier,
 //     bukan dolar per juta token).
 //  2. Katalog cadangan saat offline: menu /model tetap terisi walau
 //     jaringan/gateway sedang tidak bisa dihubungi.
@@ -13,12 +13,13 @@
 // multiplier (pengali konsumsi token terhadap kuota).
 // Status `aktif` bisa berubah sewaktu-waktu di sisi gateway — katalog live
 // dari /v1/models selalu menang atas snapshot ini (lihat api/katalog.js).
-// Perbarui snapshot: ambil https://api.relink-gateway.biz.id/v1/models dan
-// daftar multiplier di halaman web, lalu sunting berkas ini.
+// Perbarui snapshot: ambil <BASE_URL>/models memakai API_KEY yang sama
+// dengan runtime, lalu sunting berkas ini. Base URL tidak ditulis di kode —
+// ambil dari env BASE_URL atau config.json.
 
 export const TANGGAL_PRESET = "2026-11-05";
 
-export const PRESET_RELINK = [
+export const PRESET_MODEL = [
   { id: "auto", nama: "Auto", vendor: "Lainnya", vision: false, aktif: true, multiplier: 1 },
   { id: "claude-opus-5", nama: "Claude Opus 5", vendor: "Anthropic", vision: true, aktif: false, multiplier: 20 },
   { id: "claude-opus-5-5", nama: "Claude Opus 5 5", vendor: "Anthropic", vision: true, aktif: false, multiplier: 32 },
@@ -64,7 +65,13 @@ export const PRESET_RELINK = [
 ];
 
 /** Cari preset berdasarkan id (Map sekali-buat, lookup O(1)). */
-const PETA_PRESET = new Map(PRESET_RELINK.map((m) => [m.id, m]));
+/** @deprecated alias lama, dipertahankan agar impor pihak ketiga tidak rusak */
+/**
+ * @deprecated Alias lama demi kompatibilitas impor. Gunakan PRESET_MODEL.
+ */
+export const PRESET_RELINK = PRESET_MODEL;
+
+const PETA_PRESET = new Map(PRESET_MODEL.map((m) => [m.id, m]));
 export function cariPreset(id) {
   return PETA_PRESET.get(id) || null;
 }
