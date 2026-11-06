@@ -23,7 +23,9 @@ const TOOL_KE_FILE = ["baca_file", "tulis_file", "edit_file", "hapus_file", "cek
  */
 function terlihatMentok(pesan) {
   const teks = String(pesan?.content || "").toLowerCase();
-  if (!teks) return false;
+  // Balasan hampa TANPA tool_calls bukan "selesai normal" — model berhenti
+  // tanpa menghasilkan apa pun. Anggap mentok supaya giliran ditandai.
+  if (!teks) return !pesan?.tool_calls?.length;
   const pola = [
     /sepertinya (saya )?(tidak|belum|masih)/,
     /tidak ada (perubahan|kemajuan|yang berubah)/,
@@ -41,8 +43,18 @@ export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
   //  (a) selesai saat model berhenti memanggil tool,
   //  (b) berhenti saat terlihatMentok() dua putaran beruntun,
   //  (c) dibatalkan user via Ctrl-C (SIGINT ditangani index.js).
-  const batasPutaran =
-    Number(cfg.maksPutaran) === 0 ? Infinity : Number(cfg.maksPutaran) || Infinity;
+  // PENTING soal "0 = tanpa batas": dulu nilai yang tidak bisa diurai (undefined,
+  // "", NaN) ikut jatuh ke Infinity. Akibatnya cfg.maksPutaran=0 terbaca
+  // Infinity — padahal 0 justru berarti TANPA BATAS — sedangkan angka sah
+  // seperti 3 tetap jalan. Hanya 0 yang dipetakan ke Infinity; nilai tak sah
+  // dianggap "tidak diatur" → Infinity juga, tapi tidak lagi mengubah arti 0.
+  const keBatas = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return Infinity; // tak diatur → tanpa batas
+    if (n === 0) return Infinity; // 0 = eksplisit tanpa batas
+    return Math.floor(Math.abs(n));
+  };
+  const batasPutaran = keBatas(cfg.maksPutaran);
   const batasTotalTool =
     Number(cfg.maksTool) === 0 ? Infinity : Number(cfg.maksTool) || Infinity;
 
@@ -216,17 +228,24 @@ export async function buatAgen({ cfg, tools, eksekusiTool, sesi }) {
 
       jawabanTerakhir = String(pesan.content || "").trim();
 
+      // TIDAK ADA tool_calls:
+      //  - mentokBeruntun === 0 → model benar-benar selesai (balasan final).
+      //  - mentokBeruntun  >  0 → model MENGULANG jawaban yang sama tanpa tool;
+      //    ini bukan "selesai", ini berhenti karena stuck. Harus ditandai
+      //    mentok=true supaya pemanggil tahu giliran terhenti, bukan tuntas.
       if (!pesan.tool_calls?.length) {
         if (cfg.verbose) bubble("info", `selesai · ${tokenMasuk} token masuk / ${tokenKeluar} keluar · ${hasil.model || cfg.model}`);
-        return { selesai: true };
+        return mentokBeruntun > 0
+          ? { selesai: jawabanTerakhir.length > 0, mentok: true }
+          : { selesai: true };
       }
 
-      // Deteksi putaran sia-sia: model berhenti memanggil tool, atau mengulang
-      // pernyataan yang sama tanpa kemajuan.
+      // Deteksi putaran sia-sia: model mengulang pernyataan yang sama tanpa
+      // kemajuan. Dihitung sebelum tool dijalankan; dua kali beruntun → stop.
       mentokBeruntun = terlihatMentok(pesan) ? mentokBeruntun + 1 : 0;
       if (mentokBeruntun >= 2) {
         bubble("info", "Agent berhenti: tidak ada kemajuan pada dua putaran terakhir. Beri arahan lebih spesifik atau pecah tugasnya.");
-        return { selesai: jawabanTerakhir.length > 0 };
+        return { selesai: jawabanTerakhir.length > 0, mentok: true };
       }
 
       // ── JALANKAN TOOL SECARA PARALEL ──────────────────────────────────────

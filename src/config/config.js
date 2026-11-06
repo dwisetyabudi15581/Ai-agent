@@ -73,7 +73,7 @@ export const DEFAULT_CONFIG = {
 // presedensi .env atas config.json jadi tidak konsisten — BASE_URL
 // diabaikan saat simpanConfig() menuliskan URL lama dari memori ke disk.
 const FIELD_DISIMPAN = Object.keys(DEFAULT_CONFIG).filter(
-  (k) => k !== "apiKey" && k !== "baseUrl",
+  (k) => k !== "apiKey" && k !== "baseUrl" && k !== "baseCadangan",
 );
 
 // Kredensial TIDAK PERNAH ditulis ke config.json — sumber tunggal adalah .env
@@ -134,10 +134,16 @@ export async function muatConfig() {
     delete dariFile.apiKey;
     perluSimpan = true;
   }
+  // Kunci tak dikenal dibuang. apiKey dibuang (kredensial hanya di .env),
+  // tetapi baseUrl/baseCadangan TETAP dibaca: pengguna boleh mengisi endpoint
+  // di config.json. Saat menulis, simpanConfig tetap memakai FIELD_DISIMPAN.
   for (const k of Object.keys(dariFile)) {
-    if (!Object.prototype.hasOwnProperty.call(DEFAULT_CONFIG, k)) { delete dariFile[k]; perluSimpan = true; }
+    if (!Object.prototype.hasOwnProperty.call(DEFAULT_CONFIG, k) || k === "apiKey") {
+      delete dariFile[k];
+      perluSimpan = true;
+    }
   }
-  if (perluSimpan && Object.keys(dariFile).length) {
+  if (perluSimpan) {
     // Tulis balik ke disk supaya residu tidak ikut terbaca lagi.
     // Kegagalan tulis tidak boleh mematikan start: cukup dicatat di verbose.
     try { await fs.writeFile(BERKAS_CONFIG, JSON.stringify(dariFile, null, 2)); }
@@ -203,7 +209,11 @@ export async function muatConfig() {
     ...(ambilEnv("MODEL") ? { model: ambilEnv("MODEL") } : {}),
     ...(ambilEnv("MODEL_CEPAT") ? { modelCepat: ambilEnv("MODEL_CEPAT") } : {}),
     ...(ambilEnv("MODEL_CADANGAN") ? { modelCadangan: ambilEnv("MODEL_CADANGAN") } : {}),
-    ...(ambilEnv("BASE_CADANGAN") ? { baseCadangan: ambilEnv("BASE_CADANGAN") } : {}),
+    // Nama generik BASE_URL_CADANGAN diutamakan; BASE_CADANGAN dibaca sebagai
+    // alias lama. Host/endpoint tidak pernah menang atas config.json basi.
+    ...(ambilEnv("BASE_URL_CADANGAN") || ambilEnv("BASE_CADANGAN")
+      ? { baseCadangan: ambilEnv("BASE_URL_CADANGAN") || ambilEnv("BASE_CADANGAN") }
+      : {}),
     ...(ambilEnv("NAMA_AGENT") ? { namaAgent: ambilEnv("NAMA_AGENT") } : {}),
     ...(envNum("MAX_TOKENS") !== undefined ? { maxTokens: envNum("MAX_TOKENS") } : {}),
     ...(envNum("SUHU") !== undefined ? { suhu: envNum("SUHU") } : {}),
@@ -222,6 +232,7 @@ export async function muatConfig() {
       const bersih = { ...dariFile };
       delete bersih.baseUrl;
       delete bersih.apiKey;
+      delete bersih.baseCadangan;
       return bersih;
     })(),
     apiKey: ambilEnv("API_KEY") || dariFile.apiKey || "",
@@ -274,9 +285,23 @@ export async function simpanConfig(cfg) {
  * non-stream : baseCadangan -> baseUrl (host cadangan biasanya tanpa batas edge)
  * Bila baseCadangan kosong / sama dengan baseUrl, cukup satu host.
  */
-export function daftarUrl(cfg, { stream = true } = {}) {
-  const utama = (cfg.baseUrl || "").trim().replace(/\/+$/, "");
-  const cadangan = (cfg.baseCadangan || "").replace(/\/+$/, "");
+/**
+ * Menormalkan sebuah base URL menjadi BASIS endpoint (tanpa /chat/completions).
+ * daftarUrl() lalu menempelkan "/chat/completions" tepat sekali, sehingga
+ * BASE_CADANGAN yang ditulis lengkap ".../v1/chat/completions" tidak menghasilkan
+ * URL dobel. String kosong/tidak valid dikembalikan sebagai "".
+ */
+function normalBasis(url) {
+  let b = String(url || "").trim();
+  if (b === "") return "";
+  b = b.replace(/\/+$/, "");
+  b = b.replace(/\/chat\/completions$/i, "");
+  b = b.replace(/\/+$/, "");
+  return b;
+}
+
+export function daftarUrl(cfg, { stream = true } = {}) {  const utama = normalBasis(cfg.baseUrl);
+  const cadangan = normalBasis(cfg.baseCadangan);
   const urut = cadangan && cadangan !== utama
     ? (stream ? [utama, cadangan] : [cadangan, utama])
     : [utama];

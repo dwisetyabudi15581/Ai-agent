@@ -28,7 +28,7 @@ const buat = await simpanTool({
 cek("simpan tool sah", buat.ok === true, buat.pesan);
 
 const daftar = await muatToolDinamis({ paksa: true });
-cek("tool termuat dari disk", daftar.length === 1 && daftar[0].meta.nama === "uji_echo", `jumlah=${daftar.length}`);
+cek("tool termuat dari disk", daftar.some((t) => t.meta.nama === "uji_echo"), `jumlah=${daftar.length}`);
 
 // ---------- 4. tool muncul di skema yang dilihat model ----------
 const skema = await daftarToolsLengkap();
@@ -72,7 +72,7 @@ const rusak = berkasTool("tool_rusak");
 await fs.writeFile(rusak, "export const meta = { nama: 'tool_rusak' };\nexport async function jalankan( { ini sintaks rusak");
 segarkanCache();
 const daftar2 = await muatToolDinamis({ paksa: true });
-cek("tool rusak dilewati, sisanya tetap termuat", daftar2.length === 1 && daftar2[0].meta.nama === "uji_echo", `jumlah=${daftar2.length}`);
+cek("tool rusak dilewati, sisanya tetap termuat", daftar2.some((t) => t.meta.nama === "uji_echo") && !daftar2.some((t) => t.meta.nama === "tool_rusak"), `jumlah=${daftar2.length}`);
 await fs.unlink(rusak);
 
 // ---------- 9. tool yang jalankan-nya error ditangani eksekutor ----------

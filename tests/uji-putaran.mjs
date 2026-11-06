@@ -126,7 +126,7 @@ server.on("request", (req, res) => {
 const sesi3 = { id: "uji-putaran-3", messages: [{ role: "user", content: "kerjakan" }] };
 const hasil3 = await buatAgen({ cfg, tools, eksekusiTool, sesi: sesi3 }).then((a) => a.giliran("auto", "kerjakan"));
 console.log(`\nhasil3=${JSON.stringify(hasil3)}  panggilanModel=${n3}\n`);
-if (n3 === 2 && hasil3?.mentok !== true) ok("deteksi mentok memutus loop di putaran 2 (lebih awal dari batas 3)");
+if (n3 === 2 && hasil3?.mentok === true) ok("deteksi mentok memutus loop di putaran 2 (lebih awal dari batas 3)");
 else gagal(`deteksi mentok tidak bekerja → panggilan=${n3} hasil=${JSON.stringify(hasil3)}`);
 
 server.close();

@@ -32,6 +32,7 @@ import { muatMemori, simpanMemori, BERKAS_MEMORI, KERANGKA_MEMORI } from "./src/
 import { panel, pilihModel } from "./src/ui/tampilan.js";
 import { mulaiInput, tanyaTeks, tutupInput } from "./src/ui/input.js";
 import { siapkanKeluar, keluarAman } from "./src/ui/keluar.js";
+import { tampilDirData } from "./src/paths.js";
 
 // ===================== ARGUMEN =====================
 const argv = process.argv.slice(2);
@@ -65,7 +66,7 @@ const batasGiliran = Number(nilai("max")) || Infinity;
 
 if (!cfg.apiKey) {
   tulis(`${C.red}API key Re:Link belum ada.${C.reset}`);
-  tulis(`${C.gray}Set: export API_KEY=sk-...  atau isi ~/.agent-termux/config.json${C.reset}`);
+  tulis(`${C.gray}Set: export API_KEY=sk-...  atau isi ${tampilDirData()}/config.json${C.reset}`);
   process.exit(1);
 }
 

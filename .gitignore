@@ -16,3 +16,9 @@ uji-edit.txt
 # Arsip backup lokal (berisi salinan .env — JANGAN commit)
 .arsip-branding/
 *.bak
+
+# folder sementara pengujian (pola lain)
+.tmp/
+tmp_uji/
+# skrip debug sementara
+tests/_dbg-*.mjs
