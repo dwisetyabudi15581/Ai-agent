@@ -10,7 +10,7 @@ import { ambilKatalogLengkap, kapabilitasTampil } from "../api/katalog.js";
 import { muatMemori, tambahMemori } from "../core/memori.js";
 import {
   muatToolDinamis, keSkema, simpanTool, hapusTool,
-  daftarToolDinamis, galatTool, DIR_TOOL, namaSah,
+  daftarToolDinamis, galatTool, DIR_TOOL, namaSah, setNamaBawaan,
 } from "./registry.js";
 
 const execAsync = promisify(exec);
@@ -146,6 +146,11 @@ function toolBawaan() {
 // Nama tool bawaan (dipakai untuk mencegah tool dinamis menimpa/menyamar
 // sebagai tool inti, dan untuk membedakan sumber kode di lihat_tool).
 const NAMA_BAWAAN = new Set(toolBawaan().map((t) => t.function?.name).filter(Boolean));
+
+// Serahkan daftar nama inti ke registry supaya guard "tidak boleh menimpa
+// tool bawaan" juga berlaku di simpanTool() — bukan hanya di bikin_tool.
+// Tanpa ini, pemanggilan simpanTool langsung tetap menulis berkas shadow.
+setNamaBawaan([...NAMA_BAWAAN]);
 
 // ---------- Peta kemampuan: tool → kemampuan yang dibutuhkan ----------
 // Dipakai router untuk menyimpulkan kebutuhan model dari tool yang SEDANG

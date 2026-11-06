@@ -47,6 +47,34 @@ export function namaSah(nama) {
   return NAMA_SAH.test(String(nama || ""));
 }
 
+/**
+ * Nama tool BAWAAN (dari tools.js). Diisi sekali oleh tools.js lewat
+ * `setNamaBawaan()` saat modul dimuat.
+ *
+ * MENGAPA ADA DI SINI
+ * Guard "tool dinamis tidak boleh menimpa tool bawaan" sebelumnya hanya
+ * dipasang di tools.js (`bikin_tool` dan daftarToolsLengkap). Akibatnya
+ * `simpanTool()` — yang juga dipanggil langsung oleh kode lain dan oleh
+ * uji — TETAP menulis berkas shadow `~/.agent-termux/tools/baca_file.tool.js`
+ * ke disk walau tool-nya ditolak. Berkas mati itu menumpuk, membuat
+ * `lihat_tool` ambigu, dan mengotori folder tool.
+ *
+ * Guard di lapisan registry membuat SEMUA jalur (termasuk pemanggilan
+ * langsung simpanTool) ikut aman — pertahanan tidak bergantung pada
+ * disiplin pemanggil.
+ */
+let namaBawaan = new Set();
+
+/** Dipanggil tools.js sekali saat modul dimuat untuk menyerahkan daftar nama inti. */
+export function setNamaBawaan(daftar) {
+  namaBawaan = new Set((daftar || []).filter(Boolean));
+}
+
+/** True bila `nama` adalah tool bawaan (tidak boleh dibuat/ditimpa). */
+export function namaBawaanTool(nama) {
+  return namaBawaan.has(String(nama || ""));
+}
+
 /** Path berkas tool untuk sebuah nama. */
 export function berkasTool(nama) {
   return path.join(DIR_TOOL, `${nama}.tool.js`);
@@ -83,6 +111,14 @@ export async function muatToolDinamis(opsi = {}) {
           const meta = mod.meta || {};
           const jalankan = mod.jalankan || mod.default;
           if (!namaSah(meta.nama)) { galat.push(`${f}: meta.nama tidak sah ("${meta.nama}")`); continue; }
+          if (namaBawaanTool(meta.nama)) {
+            // Berkas shadow dari versi lama (dibuat sebelum guard registry ada).
+            // Dibuang dari daftar SEKALIGUS dihapus dari disk supaya tidak
+            // menumpuk dan tidak membingungkan `lihat_tool`.
+            galat.push(`${f}: nama "${meta.nama}" bentrok dengan tool bawaan → berkas dihapus`);
+            await fs.unlink(penuh).catch(() => {});
+            continue;
+          }
           if (typeof jalankan !== "function") { galat.push(`${f}: tidak ada fungsi jalankan(args, ctx)`); continue; }
           if (!meta.deskripsi) { galat.push(`${f}: meta.deskripsi kosong`); continue; }
           daftar.push({ meta, jalankan, berkas: penuh });
@@ -173,6 +209,9 @@ ${isiJalankan}
 export async function simpanTool({ nama, deskripsi, parameter, kode, kategori }) {
   if (!namaSah(nama)) {
     return { ok: false, pesan: `Nama tool tidak sah: "${nama}". Gunakan huruf kecil, angka, garis bawah (mis. cek_baterai).` };
+  }
+  if (namaBawaanTool(nama)) {
+    return { ok: false, pesan: `"${nama}" adalah tool BAWAAN dan tidak boleh ditimpa. Pilih nama lain (mis. cek_${nama}).` };
   }
   if (!deskripsi || !String(deskripsi).trim()) {
     return { ok: false, pesan: "Deskripsi tool wajib diisi — model memakainya untuk memutuskan kapan tool dipakai." };

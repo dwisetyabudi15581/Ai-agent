@@ -81,7 +81,16 @@ cek("lihat_tool bawaan", r5.ok === true && /tool bawaan/i.test(r5.raw), r5.raw.s
 const r6 = await jalankan({
   function: { name: "bikin_tool", arguments: JSON.stringify({ nama: "baca_file", deskripsi: "coba timpa" }) },
 });
-cek("bikin_tool tolak nama bawaan (tanpa crash)", typeof r6.ok === "boolean", r6.judul);
+// Cek LEMAH sebelumnya: `typeof r6.ok === "boolean"` selalu true → bug "shadow
+// baca_file.tool.js ditulis ke home asli" lolos dari suite selama ini.
+// Sekarang diverifikasi sungguhan: harus DITOLAK dan tidak boleh ada berkas.
+cek("bikin_tool tolak nama bawaan", r6.ok === false, r6.judul);
+cek("bikin_tool pesan jelas soal bawaan", /bawaan/i.test(String(r6.raw || "")), String(r6.raw).slice(0, 60));
+cek(
+  "tidak ada berkas shadow baca_file.tool.js",
+  !fs.existsSync(path.join(process.env.HOME || "", ".agent-termux", "tools", "baca_file.tool.js")),
+  "berkas shadow tidak boleh ditulis"
+);
 
 // 7. daftar tool tidak duplikat
 const tl = daftarTools().map((t) => t.function.name);

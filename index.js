@@ -296,6 +296,9 @@ async function tanganiPerintah(input) {
       return true;
 
     case "suhu": {
+      // Tanpa argumen → TAMPILKAN nilai aktif. Jangan pernah menulis:
+      // Number("") = 0 lolos rentang 0–2 dan diam-diam mereset suhu user.
+      if (!arg) { bubble("info", `Suhu aktif = ${cfg.suhu} (rentang 0–2). Pakai: /suhu 0.7`); return true; }
       const n = Number(arg);
       if (!Number.isFinite(n) || n < 0 || n > 2) { bubble("error", "Suhu harus 0–2."); return true; }
       cfg.suhu = n;
@@ -305,6 +308,8 @@ async function tanganiPerintah(input) {
     }
 
     case "maxtoken": {
+      // Tanpa argumen → tampilkan batas aktif (bukan menulis 0/NaN).
+      if (!arg) { bubble("info", `max_tokens aktif = ${cfg.maxTokens} (minimal 64). Pakai: /maxtoken 4096`); return true; }
       const n = Number(arg);
       if (!Number.isFinite(n) || n < 64) { bubble("error", "minimal 64."); return true; }
       cfg.maxTokens = Math.min(n, 131072);
@@ -315,6 +320,9 @@ async function tanganiPerintah(input) {
 
     // 0 = tanpa batas. Selain itu dibatasi 1..10000 sebagai rem pengaman.
     case "putaran": {
+      // Tanpa argumen → tampilkan. Number("") = 0 akan mengubah arti ke
+      // "TANPA BATAS" tanpa niat user — persis kebalikan dari harapan.
+      if (!arg) { bubble("info", `Putaran per giliran = ${cfg.maksPutaran === 0 ? "tanpa batas" : cfg.maksPutaran}. Pakai: /putaran 8`); return true; }
       const n = Number(arg);
       if (!Number.isFinite(n) || n < 0) { bubble("error", "Pakai angka ≥ 0 (0 = tanpa batas)."); return true; }
       const nilai = n === 0 ? 0 : Math.min(n, 10000);
@@ -325,6 +333,8 @@ async function tanganiPerintah(input) {
     }
 
     case "makstool": {
+      // Tanpa argumen → tampilkan, jangan tulis 0 (= tanpa batas) diam-diam.
+      if (!arg) { bubble("info", `Total tool per giliran = ${cfg.maksTool === 0 ? "tanpa batas" : cfg.maksTool}. Pakai: /maksTool 20`); return true; }
       const n = Number(arg);
       if (!Number.isFinite(n) || n < 0) { bubble("error", "Pakai angka ≥ 0 (0 = tanpa batas)."); return true; }
       const nilai = n === 0 ? 0 : Math.min(n, 10000);
