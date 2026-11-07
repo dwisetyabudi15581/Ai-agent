@@ -50,10 +50,10 @@ try {
     U("https://cadangan.example.com/v1"),
   ]);
 
-  // 3) urutan non-stream: cadangan didahulukan
-  cek("daftarUrl non-stream cadangan dulu", daftarUrl(cfg, { stream: false }), [
-    U("https://cadangan.example.com/v1"),
+  // 3) host utama selalu didahulukan, juga pada non-stream
+  cek("daftarUrl non-stream utama dulu", daftarUrl(cfg, { stream: false }), [
     U("https://utama.example.com/v1"),
+    U("https://cadangan.example.com/v1"),
   ]);
 
   // 4) alias lama BASE_URL_CADANGAN

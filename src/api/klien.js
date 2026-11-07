@@ -38,6 +38,10 @@ export async function panggilChat(cfg, messages, tools, opsi = {}) {
   if (cfg.modelCadangan && cfg.modelCadangan !== model) daftarModel.push(cfg.modelCadangan);
 
   let galatTerakhir;
+  let galatSebelumnya; // galat dari host/model yang lebih diutamakan
+  // Set true begitu satu host terbukti hidup (walau modelnya menolak), supaya
+  // galat "model tidak mendukung" tidak tertimpa galat host mati di bawahnya.
+  let adaHostHidup = false;
 
   // Susun tahap: stream dipertahankan lebih dulu (host utama → cadangan),
   // baru jatuh ke non-stream. Bila host cadangan tidak muncul di daftar
@@ -83,11 +87,21 @@ export async function panggilChat(cfg, messages, tools, opsi = {}) {
           });
 
           if (!res.ok) {
-            const teks = await res.text().catch(() => "");
+            const teks = await res.text().catch(() => ""); adaHostHidup = true;
             let pesan = teks;
             try { pesan = JSON.parse(teks)?.error?.message || teks; } catch { /* mentah */ }
             galatTerakhir = new Error(`HTTP ${res.status} — ${String(pesan).slice(0, 300)}`);
-            if ([403, 404, 429, 500, 502, 503, 504].includes(res.status)) tandaiBermasalah(dasarDari(url));
+            // 403/404 = model tidak tersedia di host ini (host-nya sendiri hidup),
+            // jadi host TIDAK ditandai bermasalah: model tetap dicoba lagi di host
+            // berikutnya, dan host asal tetap dipakai untuk model lain.
+            if ([403, 404].includes(res.status)) {
+              if (galatTerakhir) galatSebelumnya = galatTerakhir;
+            } else {
+              if ([429, 500, 502, 503, 504].includes(res.status)) tandaiBermasalah(dasarDari(url));
+              // Host mati di bawah host yang sudah terbukti hidup: jangan
+              // menimpa galat model (lebih informatif) dengan galat host.
+              if (adaHostHidup && galatSebelumnya) galatTerakhir = galatSebelumnya;
+            }
             continue;
           }
 

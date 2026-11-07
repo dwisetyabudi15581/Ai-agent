@@ -66,9 +66,9 @@ cek("daftarUrl stream: utama → cadangan",
   urutStream[0] === "https://utama.example.com/v1/chat/completions" &&
   urutStream[1] === "https://cadangan.example.net/v1/chat/completions",
   `→ ${JSON.stringify(urutStream)}`);
-cek("daftarUrl non-stream: cadangan → utama",
-  urutBiasa[0] === "https://cadangan.example.net/v1/chat/completions" &&
-  urutBiasa[1] === "https://utama.example.com/v1/chat/completions",
+cek("daftarUrl non-stream: utama → cadangan",
+  urutBiasa[0] === "https://utama.example.com/v1/chat/completions" &&
+  urutBiasa[1] === "https://cadangan.example.net/v1/chat/completions",
   `→ ${JSON.stringify(urutBiasa)}`);
 
 // 4. Tanpa cadangan hanya satu host

@@ -145,8 +145,10 @@ export async function muatConfig() {
   }
   if (perluSimpan) {
     // Tulis balik ke disk supaya residu tidak ikut terbaca lagi.
+    // Hanya FIELD_DISIMPAN yang ditulis (apiKey/baseUrl/baseCadangan tidak),
+    // jadi residu tidak mungkin membawa kredensial atau endpoint lama.
     // Kegagalan tulis tidak boleh mematikan start: cukup dicatat di verbose.
-    try { await fs.writeFile(BERKAS_CONFIG, JSON.stringify(dariFile, null, 2)); }
+    try { await simpanConfig(dariFile); }
     catch (e) { if (process.env.AGENT_VERBOSE) console.error("[config] gagal simpan pembersihan:", e.message); }
   }
 
@@ -302,9 +304,11 @@ function normalBasis(url) {
 
 export function daftarUrl(cfg, { stream = true } = {}) {  const utama = normalBasis(cfg.baseUrl);
   const cadangan = normalBasis(cfg.baseCadangan);
-  const urut = cadangan && cadangan !== utama
-    ? (stream ? [utama, cadangan] : [cadangan, utama])
-    : [utama];
+  // Host utama SELALU dicoba lebih dulu. Sebelumnya urutan dibalik untuk
+  // non-stream, sehingga frasa "urutan host sudah benar" di laporan tidak
+  // sesuai kenyataan: pada non-stream cadangan justru dihubungi duluan.
+  // Host cadangan kini murni fallback (dipakai saat utama gagal).
+  const urut = cadangan && cadangan !== utama ? [utama, cadangan] : [utama];
   const sekarang = Date.now();
   const terisi = urut.filter((u) => u.length > 0);
   if (!terisi.length) return [];

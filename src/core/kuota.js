@@ -112,6 +112,52 @@ export function formatToken(n) {
   return num.toLocaleString("id-ID");
 }
 
+/**
+ * Jalur khusus gateway ThorHub: login portal via API key, lalu baca /api/portal/me.
+ * Mengembalikan data mentah yang sudah berbentuk { token_limit, tokens_used, ... }.
+ */
+async function ambilViaPortal(dasar, kunci) {
+  const kirim = async (url, opsi = {}) => {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), BATAS_MS);
+    try {
+      return await fetch(url, {
+        ...opsi,
+        headers: { Accept: "application/json", "User-Agent": "AgentTermux/3.3", ...(opsi.headers || {}) },
+        signal: ctl.signal,
+      });
+    } finally {
+      clearTimeout(t);
+    }
+  };
+
+  const login = await kirim(dasar + "/api/portal/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_key: kunci }),
+  });
+  if (!login.ok) return { galat: `portal/login → ${login.status}` };
+
+  // ambil cookie sesi dari respons login
+  let cookie = "";
+  try {
+    const mentah = typeof login.headers.getSetCookie === "function"
+      ? login.headers.getSetCookie()
+      : [login.headers.get("set-cookie")].filter(Boolean);
+    cookie = mentah.map((c) => String(c).split(";")[0]).filter(Boolean).join("; ");
+  } catch { cookie = ""; }
+
+  const me = await kirim(dasar + "/api/portal/me", {
+    headers: cookie ? { Cookie: cookie } : {},
+  });
+  if (!me.ok) return { galat: `portal/me → ${me.status}` };
+  let data = null;
+  try { data = await me.json(); } catch { return { galat: "portal/me → bukan JSON" }; }
+  const isi = data?.data && typeof data.data === "object" ? data.data : data;
+  if (!isi || typeof isi !== "object") return { galat: "portal/me → kosong" };
+  return { data: isi, url: dasar + "/api/portal/me" };
+}
+
 function kandidatPath() {
   return [
     "/dashboard/billing/subscription",
@@ -153,6 +199,33 @@ function normalBasis(u) {
 }
 
 /**
+ * Membaca variabel dari berkas .env apa adanya. Nilai di process.env tidak selalu
+ * tersedia (mis. saat modul dipanggil dari tool yang tidak mewarisi env shell),
+ * jadi berkas .env dibaca langsung dan nilainya diprioritaskan.
+ */
+function dibacaEnv() {
+  const hasil = {};
+  const kandidat = [
+    ".env",
+    process.env.HOME ? path.join(process.env.HOME, "agent-termux-pc", ".env") : null,
+    path.join(process.cwd(), ".env"),
+  ];
+  for (const berkas of kandidat) {
+    try {
+      if (!berkas || !fs.existsSync(berkas)) continue;
+      const teks = fs.readFileSync(berkas, "utf8");
+      for (const baris of teks.split(/\r?\n/)) {
+        const cocok = baris.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
+        if (!cocok) continue;
+        const nilai = cocok[2].trim().replace(/^["']|["']$/g, "").replace(/\s+#.*$/, "");
+        if (nilai && !hasil[cocok[1]]) hasil[cocok[1]] = nilai;
+      }
+    } catch { /* abaikan berkas yang tidak terbaca */ }
+  }
+  return hasil;
+}
+
+/**
  * Ambil kuota dari gateway. cfg = konfigurasi hasil muatConfig().
  * @returns {Promise<{ok:boolean, status?:number, data?:any, galat?:string, url?:string}>}
  */
@@ -175,6 +248,24 @@ export async function ambilKuota(cfg) {
   if (!urlDasar.length) return { ok: false, galat: "Base URL gateway belum dikonfigurasi" };
 
   const galatKumpulan = [];
+
+  // 1) Jalur utama: portal gateway (API key → cookie sesi → /api/portal/me)
+  for (const dasar of urlDasar) {
+    try {
+      const hasil = await ambilViaPortal(dasar, kunci);
+      if (hasil.data) {
+        const ringkas = ringkasKuota(hasil.data);
+        if (ringkas) return { ok: true, status: 200, data: hasil.data, url: hasil.url, via: "portal" };
+        galatKumpulan.push(`${hasil.url} → 200 tapi tidak ada angka kuota`);
+      } else {
+        galatKumpulan.push(`${dasar}/api/portal → ${hasil.galat}`);
+      }
+    } catch (e) {
+      galatKumpulan.push(`${dasar}/api/portal → ${e.name === "AbortError" ? "timeout" : e.message}`);
+    }
+  }
+
+  // 2) Cadangan: endpoint gaya OpenAI /v1/dashboard/billing/...
   for (const dasar of urlDasar) {
     for (const p of kandidatPath()) {
       const url = dasar + p;
