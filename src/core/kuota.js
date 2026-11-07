@@ -64,13 +64,21 @@ export function ringkasKuota(data) {
   const d = data.data && typeof data.data === "object" ? data.data : data;
   const akun = d.user && typeof d.user === "object" ? d.user : d;
 
-  const tokenTotal = cariAngkaDalam(d, ["total_tokens", "totalTokens", "token_used", "tokens_used", "used_tokens", "usage", "used"]);
-  const tokenPrompt = cariAngkaDalam(d, ["prompt_tokens", "input_tokens", "tokens_input"]);
-  const tokenCompletion = cariAngkaDalam(d, ["completion_tokens", "output_tokens", "tokens_output"]);
-  const tokenCache = cariAngkaDalam(d, ["cached_tokens", "cache_tokens", "cached"]);
-  const maks = cariAngkaDalam(d, ["hard_limit_usd", "hard_limit", "token_limit", "tokens_limit", "total_tokens_limit", "quota", "limit", "max_tokens", "credit_limit", "total"]);
-  let sisa = cariAngkaDalam(d, ["sisa_token", "remaining_tokens", "tokens_remaining", "sisa", "remaining", "saldo", "balance", "credit_remaining"]);
-  const pakaiLangsung = cariAngkaDalam(d, ["token_terpakai", "tokens_used_total", "tokensUsed", "terpakai"]);
+  // Blok "usage" bersarang (skema gateway Re:Link: { usage: { prompt_tokens, ... } })
+  const blokUsage = d.usage && typeof d.usage === "object" ? d.usage : {};
+
+  const tokenTotal = cariAngkaDalam(d, ["total_tokens", "totalTokens", "token_used", "tokens_used", "used_tokens", "usage", "used"])
+    ?? cariAngkaDalam(blokUsage, ["total_tokens", "totalTokens", "tokens_used", "used"]);
+  const tokenPrompt = cariAngkaDalam(d, ["prompt_tokens", "input_tokens", "tokens_input"])
+    ?? cariAngkaDalam(blokUsage, ["prompt_tokens", "input_tokens"]);
+  const tokenCompletion = cariAngkaDalam(d, ["completion_tokens", "output_tokens", "tokens_output"])
+    ?? cariAngkaDalam(blokUsage, ["completion_tokens", "output_tokens"]);
+  const tokenCache = cariAngkaDalam(d, ["cached_tokens", "cache_tokens", "cached"])
+    ?? cariAngkaDalam(blokUsage, ["cached_tokens", "cache_tokens", "cached"]);
+  const maks = cariAngkaDalam(d, ["maxTokens", "hard_limit_usd", "hard_limit", "token_limit", "tokens_limit", "total_tokens_limit", "quota", "limit", "max_tokens", "credit_limit", "total"]);
+  let sisa = cariAngkaDalam(d, ["sisa_token", "remainingTokens", "remaining_tokens", "tokens_remaining", "sisa", "remaining", "saldo", "balance", "credit_remaining"]);
+  const pakaiLangsung = cariAngkaDalam(d, ["token_terpakai", "tokens_used_total", "tokensUsed", "terpakai"])
+    ?? cariAngkaDalam(blokUsage, ["total_tokens", "tokens_used", "used"]);
   const pakai = pakaiLangsung !== null ? pakaiLangsung : tokenTotal;
 
   // Endpoint OpenAI billing: hard_limit_usd + total_usage (dalam sen/unit)
@@ -79,7 +87,8 @@ export function ringkasKuota(data) {
     // tidak bisa ditentukan; biarkan null
   }
 
-  const permintaan = cariAngkaDalam(d, ["total_requests", "requests", "request_count", "jumlah_permintaan", "calls"]);
+  const permintaan = cariAngkaDalam(d, ["total_requests", "requests", "request_count", "jumlah_permintaan", "calls"])
+    ?? cariAngkaDalam(blokUsage, ["requests", "total_requests", "request_count"]);
   const nama = cariStringDalam(akun, ["nama", "name", "username", "email", "nama_akun", "account"]);
   const status = cariStringDalam(akun, ["status", "plan", "tier", "role", "paket"]);
   const kedaluwarsa = cariStringDalam(d, ["kedaluwarsa", "expires_at", "expired_at", "expiresAt", "masa_berlaku", "valid_until", "access_until", "berlaku_sampai"]);
@@ -88,7 +97,10 @@ export function ringkasKuota(data) {
   const dilarang = cariStringDalam(d, ["dilarang", "banned", "blocked", "blokir"]);
   const penalti = Boolean(penaltiSampai || alasanPenalti || (d.penalti === true) || (d.penalty === true));
 
-  const persen = maks && maks > 0 && pakai !== null ? Math.round((pakai / maks) * 1000) / 10 : null;
+  const persenLangsung = cariAngkaDalam(d, ["usagePercent", "usage_percent", "persen_terpakai", "percent_used"]);
+  const persen = persenLangsung !== null
+    ? persenLangsung
+    : (maks && maks > 0 && pakai !== null ? Math.round((pakai / maks) * 1000) / 10 : null);
 
   const hasil = {
     nama, status,
@@ -160,17 +172,17 @@ async function ambilViaPortal(dasar, kunci) {
 
 function kandidatPath() {
   return [
+    // Endpoint resmi gateway Re:Link (terbukti 200). Basis dari daftarUrl()
+    // sudah berakhiran "/v1", jadi jangan pakai "/v1/..." di sini (dobel v1).
+    "/quota",
+    "/kuota",
     "/dashboard/billing/subscription",
     "/dashboard/billing/usage?start_date=2020-01-01&end_date=2099-12-31",
     "/me",
     "/user/me",
     "/akun",
     "/account",
-    "/kuota",
-    "/quota",
     "/usage",
-    "/v1/me",
-    "/v1/kuota",
   ];
 }
 
@@ -230,7 +242,7 @@ function dibacaEnv() {
  * @returns {Promise<{ok:boolean, status?:number, data?:any, galat?:string, url?:string}>}
  */
 export async function ambilKuota(cfg) {
-  const konf = cfg || muatConfig();
+  const konf = cfg || (await muatConfig());
   // Nama generik diprioritaskan; alias lama berawalan penyedia tetap dibaca agar
   // instalasi lama tidak rusak. konf.apiKey sudah hasil resolusi muatConfig(),
   // jadi dipakai sebagai sumber terakhir bila env benar-benar kosong.

@@ -22,3 +22,7 @@ uji-edit.txt
 tmp_uji/
 # skrip debug sementara
 tests/_dbg-*.mjs
+
+# artefak audit sementara (sesi lokal)
+tes-gateway/
+tmp/
